@@ -8,14 +8,15 @@ import {
   Alert,
   Image,
   TextInput,
-  PermissionsAndroid,
+  ScrollView,
   Platform,
 } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import { launchImageLibrary } from 'react-native-image-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
 // --- AYARLAR ---
-// Server IP adresini buraya yaz (Sonuna / ekleme)
 const DEFAULT_IP = "192.168.1.127"; 
 
 function App(): React.JSX.Element {
@@ -24,118 +25,173 @@ function App(): React.JSX.Element {
   const [photoPath, setPhotoPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [history, setHistory] = useState<any[]>([]);
+  const [showHistory, setShowHistory] = useState(false); // Geçmiş ekranını aç/kapa
 
-  // Kamera İzinleri ve Cihaz Seçimi
+  // Kamera
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('back');
   const camera = useRef<Camera>(null);
 
-  // Uygulama açılınca izin iste
+  // Başlangıçta Geçmişi Yükle ve İzin İste
   useEffect(() => {
     requestPermission();
+    loadHistory();
   }, []);
 
-  // --- FOTOĞRAF ÇEKME ---
+  // --- 1. GEÇMİŞ YÖNETİMİ ---
+  const loadHistory = async () => {
+    try {
+      const jsonValue = await AsyncStorage.getItem('@lfa_history');
+      if (jsonValue != null) {
+        setHistory(JSON.parse(jsonValue));
+      }
+    } catch(e) { console.error("Geçmiş yüklenemedi", e); }
+  };
+
+  const saveToHistory = async (newResult: any) => {
+    try {
+      // Tarih ekle
+      const record = {
+        ...newResult,
+        date: new Date().toLocaleString(),
+        id: Date.now().toString()
+      };
+      const updatedHistory = [record, ...history]; // En yeniyi başa ekle
+      setHistory(updatedHistory);
+      await AsyncStorage.setItem('@lfa_history', JSON.stringify(updatedHistory));
+    } catch (e) { console.error("Kayıt hatası", e); }
+  };
+
+  const clearHistory = async () => {
+    Alert.alert("Emin misin?", "Tüm test geçmişi silinecek.", [
+      { text: "İptal", style: "cancel" },
+      { 
+        text: "SİL", 
+        style: 'destructive', 
+        onPress: async () => {
+          await AsyncStorage.removeItem('@lfa_history');
+          setHistory([]);
+        }
+      }
+    ]);
+  };
+
+  // --- 2. FOTOĞRAF İŞLEMLERİ ---
   const takePhoto = async () => {
     if (camera.current) {
       try {
-        const photo = await camera.current.takePhoto({
-          flash: 'off',
-        });
-        // Telefondaki dosya yolunu alıyoruz (file://...)
+        const photo = await camera.current.takePhoto({ flash: 'off' });
         setPhotoPath(`file://${photo.path}`);
-      } catch (e) {
-        Alert.alert("Hata", "Fotoğraf çekilemedi: " + e);
-      }
+      } catch (e) { Alert.alert("Hata", "Fotoğraf çekilemedi: " + e); }
     }
   };
 
-  // --- SUNUCUYA GÖNDERME (NATIVE YÖNTEM) ---
+  const pickFromGallery = async () => {
+    const result = await launchImageLibrary({ mediaType: 'photo', selectionLimit: 1 });
+    if (result.assets && result.assets.length > 0 && result.assets[0].uri) {
+      setPhotoPath(result.assets[0].uri);
+    }
+  };
+
+  // --- 3. SUNUCUYA GÖNDERME ---
   const sendToServer = async () => {
     if (!photoPath) return;
-
     setLoading(true);
     try {
-      // 1. Form Data Hazırla (Android'in anladığı dilden)
       const formData = new FormData();
-      
       formData.append('file', {
-        uri: photoPath,       // Dosyanın yolu
-        type: 'image/jpeg',   // Dosya tipi
-        name: 'test_lfa.jpg', // Dosya adı
+        uri: photoPath,
+        type: 'image/jpeg',
+        name: 'upload.jpg',
       });
-
-      formData.append('study', 'Proje_New');
-      formData.append('hid', 'Mobile_V2');
+      formData.append('study', 'Mobil_V3');
+      formData.append('hid', 'Patient_01');
       formData.append('conc', '0');
 
-      // 2. İsteği Gönder (Eski /analyze endpoint'ini kullanıyoruz çünkü artık gerçek dosya yolluyoruz)
       const url = `http://${ip}:8000/analyze`;
-      console.log("Gidiyor:", url);
-
       const response = await axios.post(url, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        timeout: 10000, // 10 saniye bekle
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 15000,
       });
 
-      // 3. Sonucu Göster
+      // Sonucu göster ve kaydet
       setResult(response.data);
+      saveToHistory(response.data);
 
     } catch (error: any) {
-      console.error(error);
-      Alert.alert("HATA", `Sunucuya ulaşılamadı.\nIP: ${ip}\nHata: ${error.message}`);
+      Alert.alert("HATA", `Bağlantı sorunu.\nIP: ${ip}\n${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- EKRAN: KAMERA YOKSA VEYA İZİN YOKSA ---
-  if (!hasPermission) return <View style={styles.center}><Text>Kamera izni verilmeli.</Text></View>;
-  if (!device) return <View style={styles.center}><Text>Kamera cihazı bulunamadı.</Text></View>;
+  // --- 4. EKRANLAR ---
 
-  // --- EKRAN: SONUÇ GÖSTERME ---
+  // A) GEÇMİŞ EKRANI
+  if (showHistory) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => setShowHistory(false)} style={styles.btnSmall}>
+            <Text style={styles.btnText}>GERİ</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>TEST GEÇMİŞİ</Text>
+          <TouchableOpacity onPress={clearHistory} style={[styles.btnSmall, {backgroundColor:'#d9534f'}]}>
+            <Text style={styles.btnText}>SİL</Text>
+          </TouchableOpacity>
+        </View>
+        
+        <ScrollView style={{flex:1, padding:10}}>
+          {history.length === 0 ? (
+             <Text style={{color:'#666', textAlign:'center', marginTop:50}}>Henüz kayıt yok.</Text>
+          ) : (
+            history.map((item) => (
+              <View key={item.id} style={styles.historyItem}>
+                <View>
+                  <Text style={styles.historyRatio}>{item.ratio} Ratio</Text>
+                  <Text style={styles.historyDate}>{item.date}</Text>
+                </View>
+                <View style={{alignItems:'flex-end'}}>
+                  <Text style={{color:'#aaa'}}>C: {item.c_val}</Text>
+                  <Text style={{color:'#aaa'}}>T: {item.t_val}</Text>
+                </View>
+              </View>
+            ))
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // B) SONUÇ EKRANI
   if (result) {
     return (
       <View style={styles.container}>
         <View style={styles.resultCard}>
-          <Text style={styles.resultTitle}>ANALİZ SONUCU</Text>
+          <Text style={styles.resultTitle}>ANALİZ TAMAMLANDI</Text>
           <Text style={styles.ratioText}>{result.ratio}</Text>
-          
           <View style={styles.row}>
-            <View style={styles.box}>
-              <Text style={styles.label}>Kontrol (C)</Text>
-              <Text style={styles.value}>{result.c_val}</Text>
-            </View>
-            <View style={styles.box}>
-              <Text style={styles.label}>Test (T)</Text>
-              <Text style={styles.value}>{result.t_val}</Text>
-            </View>
+            <View style={styles.box}><Text style={styles.label}>Kontrol (C)</Text><Text style={styles.value}>{result.c_val}</Text></View>
+            <View style={styles.box}><Text style={styles.label}>Test (T)</Text><Text style={styles.value}>{result.t_val}</Text></View>
           </View>
-
-          <TouchableOpacity 
-            style={styles.btnRetake} 
-            onPress={() => { setResult(null); setPhotoPath(null); }}
-          >
-            <Text style={styles.btnText}>YENİ TEST</Text>
+          <TouchableOpacity style={styles.btnRetake} onPress={() => { setResult(null); setPhotoPath(null); }}>
+            <Text style={[styles.btnText, {color:'black'}]}>YENİ TEST</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  // --- EKRAN: FOTOĞRAF ÖNİZLEME ---
+  // C) ÖNİZLEME EKRANI (Foto çekince/seçince)
   if (photoPath) {
     return (
       <View style={styles.container}>
         <Image source={{ uri: photoPath }} style={styles.previewImage} />
-        
         <View style={styles.controls}>
           <TouchableOpacity style={styles.btnCancel} onPress={() => setPhotoPath(null)}>
-            <Text style={styles.btnText}>TEKRAR</Text>
+            <Text style={styles.btnText}>İPTAL</Text>
           </TouchableOpacity>
-          
           <TouchableOpacity style={styles.btnSend} onPress={sendToServer} disabled={loading}>
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>ANALİZ ET</Text>}
           </TouchableOpacity>
@@ -144,38 +200,38 @@ function App(): React.JSX.Element {
     );
   }
 
-  // --- EKRAN: KAMERA (CANLI) ---
+  // D) KAMERA EKRANI (Ana Ekran)
+  if (!device) return <View style={styles.center}><Text>Kamera Yok</Text></View>;
+
   return (
     <View style={styles.container}>
-      {/* IP AYAR KUTUSU (En üstte) */}
-      <View style={styles.ipBox}>
-        <Text style={{color:'white'}}>Sunucu IP:</Text>
-        <TextInput 
-          style={styles.ipInput} 
-          value={ip} 
-          onChangeText={setIp} 
-          keyboardType="numeric"
-        />
+      {/* Üst Bar: IP ve Geçmiş */}
+      <View style={styles.topBar}>
+         <TextInput style={styles.ipInput} value={ip} onChangeText={setIp} keyboardType="numeric" />
+         <TouchableOpacity onPress={() => setShowHistory(true)} style={styles.historyBtn}>
+            <Text style={{fontSize:20}}>📜</Text>
+         </TouchableOpacity>
       </View>
 
-      <Camera
-        ref={camera}
-        style={StyleSheet.absoluteFill}
-        device={device}
-        isActive={true}
-        photo={true}
-      />
-
-      {/* Şablon Çerçevesi (Yeşil Kutu) */}
+      <Camera ref={camera} style={StyleSheet.absoluteFill} device={device} isActive={true} photo={true} />
+      
+      {/* Çerçeve */}
       <View style={styles.overlay}>
         <View style={styles.frame} />
-        <Text style={styles.hint}>LFA Kasetini Çerçeveye Al</Text>
+        <Text style={styles.hint}>LFA Kasetini Hizala</Text>
       </View>
 
+      {/* Alt Bar: Galeri ve Çekim */}
       <View style={styles.bottomBar}>
+        <TouchableOpacity style={styles.galleryBtn} onPress={pickFromGallery}>
+           <Text style={{fontSize:24}}>🖼️</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity style={styles.captureBtn} onPress={takePhoto}>
           <View style={styles.captureBtnInner} />
         </TouchableOpacity>
+
+        <View style={{width:50}} /> 
       </View>
     </View>
   );
@@ -186,26 +242,29 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'black' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   
-  // Kamera Arayüzü
+  // Üst Bar
+  topBar: { position:'absolute', top:40, left:20, right:20, zIndex:10, flexDirection:'row', justifyContent:'space-between' },
+  ipInput: { backgroundColor:'white', width:150, height:40, borderRadius:8, paddingHorizontal:10, color:'black', textAlign:'center' },
+  historyBtn: { backgroundColor:'rgba(255,255,255,0.8)', width:40, height:40, borderRadius:20, justifyContent:'center', alignItems:'center' },
+
+  // Kamera
   overlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   frame: { width: 250, height: 100, borderWidth: 2, borderColor: '#00ff00', borderRadius: 10 },
   hint: { color: 'white', marginTop: 10, backgroundColor: 'rgba(0,0,0,0.5)', padding: 5 },
   
-  bottomBar: { height: 120, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center' },
+  // Alt Bar
+  bottomBar: { height: 120, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection:'row', justifyContent:'space-around', alignItems:'center', paddingHorizontal:20 },
   captureBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'white', justifyContent: 'center', alignItems: 'center' },
   captureBtnInner: { width: 70, height: 70, borderRadius: 35, borderWidth: 2, borderColor: 'black' },
-  
-  // IP Kutusu
-  ipBox: { position: 'absolute', top: 40, left: 20, zIndex: 10, backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 8 },
-  ipInput: { backgroundColor: 'white', width: 150, height: 35, padding: 5, borderRadius: 5, marginTop: 5, color: 'black' },
+  galleryBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#333', justifyContent:'center', alignItems:'center', borderWidth:1, borderColor:'#666' },
 
-  // Önizleme ve Kontroller
+  // Önizleme
   previewImage: { flex: 1, resizeMode: 'contain' },
   controls: { flexDirection: 'row', padding: 20, backgroundColor: 'black', gap: 20 },
   btnCancel: { flex: 1, backgroundColor: '#555', padding: 15, borderRadius: 10, alignItems: 'center' },
   btnSend: { flex: 1, backgroundColor: '#28a745', padding: 15, borderRadius: 10, alignItems: 'center' },
-  
-  // Sonuç Ekranı
+
+  // Sonuç
   resultCard: { backgroundColor: '#222', margin: 20, padding: 20, borderRadius: 20, alignItems: 'center', marginTop: 100 },
   resultTitle: { color: 'white', fontSize: 24, fontWeight: 'bold', marginBottom: 20 },
   ratioText: { color: '#28a745', fontSize: 60, fontWeight: 'bold' },
@@ -214,7 +273,15 @@ const styles = StyleSheet.create({
   label: { color: '#aaa', fontSize: 12 },
   value: { color: 'white', fontSize: 20, fontWeight: 'bold' },
   btnRetake: { backgroundColor: 'white', padding: 15, borderRadius: 30, width: '100%', alignItems: 'center' },
-  btnText: { fontWeight: 'bold', color: 'black' }
+  btnText: { fontWeight: 'bold', color: 'white', fontSize:16 },
+
+  // Geçmiş Ekranı
+  header: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', padding:20, paddingTop:50, backgroundColor:'#222' },
+  headerTitle: { color:'white', fontSize:18, fontWeight:'bold' },
+  btnSmall: { padding:8, backgroundColor:'#555', borderRadius:5 },
+  historyItem: { backgroundColor:'#1a1a1a', padding:15, marginBottom:10, borderRadius:10, flexDirection:'row', justifyContent:'space-between', borderLeftWidth:4, borderLeftColor:'#28a745' },
+  historyRatio: { color:'#28a745', fontSize:20, fontWeight:'bold' },
+  historyDate: { color:'#666', fontSize:12, marginTop:5 }
 });
 
 export default App;
