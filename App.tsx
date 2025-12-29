@@ -4,47 +4,53 @@ import {
   Text,
   View,
   TouchableOpacity,
-  ActivityIndicator, // <-- BAK BU ARTIK VAR (EKLENDİ)
+  ActivityIndicator,
   Alert,
   Image,
   TextInput,
   ScrollView,
   Dimensions,
+  Linking, // Ayarlara gitmek için lazım
 } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { launchImageLibrary } from 'react-native-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
-// --- AYARLAR ---
-const DEFAULT_IP = "192.168.1.127"; 
-
-// Ekran boyutları (Rehber için)
+const DEFAULT_IP = "192.168.1.127";
 const { width } = Dimensions.get('window');
-const FRAME_WIDTH = width * 0.8; 
-const FRAME_HEIGHT = FRAME_WIDTH * 0.4; 
+const FRAME_WIDTH = width * 0.8;
+const FRAME_HEIGHT = FRAME_WIDTH * 0.4;
 
 function App(): React.JSX.Element {
-  // --- STATE'LER ---
+  // STATE'LER
   const [ip, setIp] = useState(DEFAULT_IP);
   const [photoPath, setPhotoPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
   const [showHistory, setShowHistory] = useState(false);
-  
-  // Flaş (Fener) Durumu
   const [torch, setTorch] = useState<'off' | 'on'>('off');
 
-  // Kamera
+  // KAMERA İZİNLERİ
   const { hasPermission, requestPermission } = useCameraPermission();
-  const device = useCameraDevice('back');
+  
+  // Önce arka kamerayı dene, yoksa herhangi birini al
+  const device = useCameraDevice('back') || useCameraDevice('front'); 
   const camera = useRef<Camera>(null);
 
   useEffect(() => {
-    requestPermission();
+    checkPermissions();
     loadHistory();
   }, []);
+
+  const checkPermissions = async () => {
+    const permission = await requestPermission();
+    if (!permission) {
+      // İzin reddedilirse kullanıcıyı uyar
+      Alert.alert("İzin Gerekli", "Kamerayı kullanmak için izin vermelisin.");
+    }
+  };
 
   // --- GEÇMİŞ YÖNETİMİ ---
   const loadHistory = async () => {
@@ -70,7 +76,7 @@ function App(): React.JSX.Element {
     ]);
   };
 
-  // --- KAMERA İŞLEMLERİ ---
+  // --- KAMERA FONKSİYONLARI ---
   const toggleTorch = () => {
     setTorch(t => (t === 'off' ? 'on' : 'off'));
   };
@@ -78,10 +84,7 @@ function App(): React.JSX.Element {
   const takePhoto = async () => {
     if (camera.current) {
       try {
-        // Işığı zaten Torch sağladığı için anlık flaş (flash) kapalı
-        const photo = await camera.current.takePhoto({ 
-          flash: 'off' 
-        });
+        const photo = await camera.current.takePhoto({ flash: 'off' });
         setPhotoPath(`file://${photo.path}`);
       } catch (e) { Alert.alert("Hata", "Çekilemedi: " + e); }
     }
@@ -98,8 +101,8 @@ function App(): React.JSX.Element {
     try {
       const formData = new FormData();
       formData.append('file', { uri: photoPath, type: 'image/jpeg', name: 'upload.jpg' });
-      formData.append('study', 'Mobil_Torch');
-      formData.append('hid', 'Fixed_Light');
+      formData.append('study', 'Mobil_Fixed');
+      formData.append('hid', 'Permission_OK');
       formData.append('conc', '0');
 
       const url = `http://${ip}:8000/analyze`;
@@ -109,9 +112,37 @@ function App(): React.JSX.Element {
     } catch (error: any) { Alert.alert("HATA", error.message); } finally { setLoading(false); }
   };
 
-  // --- ARAYÜZ ---
-  
-  // 1. GEÇMİŞ EKRANI
+  // --- EKRANLAR ---
+
+  // 1. İZİN YOKSA (Özel Ekran)
+  if (!hasPermission) {
+    return (
+      <View style={styles.center}>
+        <Text style={{color:'white', marginBottom:20, fontSize:18}}>Kamera İzni Gerekli</Text>
+        <TouchableOpacity 
+          style={{backgroundColor:'#28a745', padding:15, borderRadius:10}}
+          onPress={async () => {
+            const result = await requestPermission();
+            if(!result) Linking.openSettings(); // Hâlâ izin vermezse ayarlara yolla
+          }}
+        >
+          <Text style={{color:'white', fontWeight:'bold'}}>İZİN VER / AYARLARI AÇ</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // 2. CİHAZ BULUNAMADIYSA
+  if (!device) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color="#fff" />
+        <Text style={{color:'white', marginTop:20}}>Kamera aranıyor...</Text>
+      </View>
+    );
+  }
+
+  // 3. GEÇMİŞ
   if (showHistory) {
     return (
       <View style={styles.container}>
@@ -132,7 +163,7 @@ function App(): React.JSX.Element {
     );
   }
 
-  // 2. SONUÇ EKRANI
+  // 4. SONUÇ
   if (result) {
     return (
       <View style={styles.container}>
@@ -149,41 +180,30 @@ function App(): React.JSX.Element {
     );
   }
 
-  // 3. ÖNİZLEME EKRANI
+  // 5. ÖNİZLEME
   if (photoPath) {
     return (
       <View style={styles.container}>
         <Image source={{ uri: photoPath }} style={styles.previewImage} />
         <View style={styles.controls}>
           <TouchableOpacity style={styles.btnCancel} onPress={() => setPhotoPath(null)}><Text style={styles.btnText}>İPTAL</Text></TouchableOpacity>
-          
           <TouchableOpacity style={styles.btnSend} onPress={sendToServer} disabled={loading}>
-            {loading ? 
-              <ActivityIndicator color="#fff" /> : 
-              <Text style={styles.btnText}>ANALİZ ET</Text>
-            }
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>ANALİZ ET</Text>}
           </TouchableOpacity>
-
         </View>
       </View>
     );
   }
 
-  // 4. KAMERA EKRANI (Ana Ekran)
-  if (!device) return <View style={styles.center}><Text>Kamera Yok</Text></View>;
-
+  // 6. KAMERA (ANA EKRAN)
   return (
     <View style={styles.container}>
-      {/* Üst Bar */}
       <View style={styles.topBar}>
          <TextInput style={styles.ipInput} value={ip} onChangeText={setIp} keyboardType="numeric" />
-         
          <View style={{flexDirection:'row', gap:10}}>
-            {/* FENER BUTONU */}
             <TouchableOpacity onPress={toggleTorch} style={[styles.iconBtn, {backgroundColor: torch === 'on' ? '#ffd700' : 'rgba(255,255,255,0.8)'}]}>
                 <Text style={{fontSize:20}}>{torch === 'on' ? '⚡' : '🔦'}</Text>
             </TouchableOpacity>
-
             <TouchableOpacity onPress={() => setShowHistory(true)} style={styles.iconBtn}>
                 <Text style={{fontSize:20}}>📜</Text>
             </TouchableOpacity>
@@ -196,13 +216,11 @@ function App(): React.JSX.Element {
         device={device} 
         isActive={true} 
         photo={true}
-        // --- KRİTİK AYARLAR ---
-        torch={torch} // Fener (Sürekli Işık)
-        exposure={0}  // Pozlama Sabitleme
+        torch={torch}
+        exposure={0}
         enableZoomGesture={false} 
       />
       
-      {/* Rehber Çizgileri */}
       <View style={styles.overlay}>
         <View style={[styles.guideBox, {width: FRAME_WIDTH, height: FRAME_HEIGHT}]}>
             <View style={[styles.cornerMarker, {top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4}]} />
@@ -211,7 +229,7 @@ function App(): React.JSX.Element {
             <View style={[styles.cornerMarker, {bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4}]} />
             <View style={styles.centerCross} />
         </View>
-        <Text style={styles.hint}>{torch === 'on' ? 'Işık Açık - Çekim Yapabilirsin' : 'Işığı Açman Önerilir 🔦'}</Text>
+        <Text style={styles.hint}>{torch === 'on' ? 'Çekime Hazır ⚡' : 'Işığı Aç 🔦'}</Text>
       </View>
 
       <View style={styles.bottomBar}>
@@ -223,19 +241,18 @@ function App(): React.JSX.Element {
   );
 }
 
+// --- STİLLER ---
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'black' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111' }, // Center stili güncellendi
   topBar: { position:'absolute', top:40, left:20, right:20, zIndex:10, flexDirection:'row', justifyContent:'space-between', alignItems:'center' },
   ipInput: { backgroundColor:'white', width:150, height:40, borderRadius:8, paddingHorizontal:10, color:'black', textAlign:'center' },
   iconBtn: { backgroundColor:'rgba(255,255,255,0.8)', width:40, height:40, borderRadius:20, justifyContent:'center', alignItems:'center' },
-  
   overlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   guideBox: { position: 'relative' },
   cornerMarker: { position: 'absolute', width: 30, height: 30, borderColor: '#00ff00' },
   centerCross: { position: 'absolute', top: '50%', left: '50%', width: 10, height: 10, backgroundColor: 'rgba(255,255,255,0.5)', borderRadius: 5, transform: [{translateX: -5}, {translateY: -5}] },
   hint: { color: '#00ff00', fontWeight:'bold', marginTop: 20, backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius:5 },
-
   bottomBar: { height: 120, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection:'row', justifyContent:'space-around', alignItems:'center', paddingHorizontal:20 },
   captureBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'white', justifyContent: 'center', alignItems: 'center' },
   captureBtnInner: { width: 70, height: 70, borderRadius: 35, borderWidth: 2, borderColor: 'black' },
