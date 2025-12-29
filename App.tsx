@@ -10,7 +10,7 @@ import {
   TextInput,
   ScrollView,
   Dimensions,
-  Linking, // Ayarlara gitmek için lazım
+  Linking,
 } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { launchImageLibrary } from 'react-native-image-picker';
@@ -23,7 +23,6 @@ const FRAME_WIDTH = width * 0.8;
 const FRAME_HEIGHT = FRAME_WIDTH * 0.4;
 
 function App(): React.JSX.Element {
-  // STATE'LER
   const [ip, setIp] = useState(DEFAULT_IP);
   const [photoPath, setPhotoPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -31,28 +30,52 @@ function App(): React.JSX.Element {
   const [history, setHistory] = useState<any[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [torch, setTorch] = useState<'off' | 'on'>('off');
+  
+  // --- KAMERA SEÇİM MANTIĞI (MANUEL FALLBACK) ---
+  const [manualDevice, setManualDevice] = useState<any>(null);
+  const [debugMsg, setDebugMsg] = useState("Başlatılıyor...");
 
-  // KAMERA İZİNLERİ
+  // İzinler
   const { hasPermission, requestPermission } = useCameraPermission();
   
-  // Önce arka kamerayı dene, yoksa herhangi birini al
-  const device = useCameraDevice('back') || useCameraDevice('front'); 
+  // 1. Yöntem: Standart Hook (Önce bunu dener)
+  const hookDevice = useCameraDevice('back');
+
+  // 2. Yöntem: Manuel Tarama (Hook bulamazsa devreye girer)
+  useEffect(() => {
+    const findCamera = async () => {
+      const status = await requestPermission();
+      if (!status) return;
+
+      // Eğer standart hook bir şey bulduysa onu kullanalım
+      if (hookDevice) {
+        setDebugMsg("Otomatik kamera bulundu.");
+        return;
+      }
+
+      // Bulamadıysa manuel tarama yap
+      setDebugMsg("Manuel kamera aranıyor...");
+      const devices = Camera.getAvailableCameraDevices();
+      setDebugMsg(`Bulunan Cihaz Sayısı: ${devices.length}`);
+
+      if (devices.length > 0) {
+        // Genelde 'back' (arka) kameraları filtrele, yoksa ilkini al
+        const bestDevice = devices.find(d => d.position === 'back') || devices[0];
+        setManualDevice(bestDevice);
+      } else {
+        setDebugMsg("HİÇ KAMERA BULUNAMADI!");
+      }
+    };
+
+    findCamera();
+    loadHistory();
+  }, [hookDevice]); // hookDevice değişirse tekrar kontrol et
+
+  // Nihai Cihaz: Hook varsa o, yoksa manuel bulunan
+  const device = hookDevice || manualDevice;
   const camera = useRef<Camera>(null);
 
-  useEffect(() => {
-    checkPermissions();
-    loadHistory();
-  }, []);
-
-  const checkPermissions = async () => {
-    const permission = await requestPermission();
-    if (!permission) {
-      // İzin reddedilirse kullanıcıyı uyar
-      Alert.alert("İzin Gerekli", "Kamerayı kullanmak için izin vermelisin.");
-    }
-  };
-
-  // --- GEÇMİŞ YÖNETİMİ ---
+  // --- DİĞER FONKSİYONLAR ---
   const loadHistory = async () => {
     try {
       const jsonValue = await AsyncStorage.getItem('@lfa_history');
@@ -76,7 +99,6 @@ function App(): React.JSX.Element {
     ]);
   };
 
-  // --- KAMERA FONKSİYONLARI ---
   const toggleTorch = () => {
     setTorch(t => (t === 'off' ? 'on' : 'off'));
   };
@@ -101,8 +123,8 @@ function App(): React.JSX.Element {
     try {
       const formData = new FormData();
       formData.append('file', { uri: photoPath, type: 'image/jpeg', name: 'upload.jpg' });
-      formData.append('study', 'Mobil_Fixed');
-      formData.append('hid', 'Permission_OK');
+      formData.append('study', 'Mobil_Forced');
+      formData.append('hid', 'Manual_Select');
       formData.append('conc', '0');
 
       const url = `http://${ip}:8000/analyze`;
@@ -114,30 +136,28 @@ function App(): React.JSX.Element {
 
   // --- EKRANLAR ---
 
-  // 1. İZİN YOKSA (Özel Ekran)
+  // 1. İZİN YOKSA
   if (!hasPermission) {
     return (
       <View style={styles.center}>
         <Text style={{color:'white', marginBottom:20, fontSize:18}}>Kamera İzni Gerekli</Text>
-        <TouchableOpacity 
-          style={{backgroundColor:'#28a745', padding:15, borderRadius:10}}
-          onPress={async () => {
-            const result = await requestPermission();
-            if(!result) Linking.openSettings(); // Hâlâ izin vermezse ayarlara yolla
-          }}
-        >
-          <Text style={{color:'white', fontWeight:'bold'}}>İZİN VER / AYARLARI AÇ</Text>
+        <TouchableOpacity style={{backgroundColor:'#28a745', padding:15, borderRadius:10}} onPress={() => Linking.openSettings()}>
+          <Text style={{color:'white', fontWeight:'bold'}}>AYARLARI AÇ</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
-  // 2. CİHAZ BULUNAMADIYSA
+  // 2. CİHAZ YÜKLENİYORSA (DEBUG MODU)
   if (!device) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#fff" />
-        <Text style={{color:'white', marginTop:20}}>Kamera aranıyor...</Text>
+        <Text style={{color:'white', marginTop:20, fontSize:16, fontWeight:'bold'}}>Kamera Aranıyor...</Text>
+        <Text style={{color:'#aaa', marginTop:10}}>Durum: {debugMsg}</Text>
+        <TouchableOpacity style={{marginTop:30, backgroundColor:'#555', padding:10, borderRadius:5}} onPress={() => Linking.openSettings()}>
+             <Text style={{color:'white'}}>İzinleri Kontrol Et</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -230,6 +250,11 @@ function App(): React.JSX.Element {
             <View style={styles.centerCross} />
         </View>
         <Text style={styles.hint}>{torch === 'on' ? 'Çekime Hazır ⚡' : 'Işığı Aç 🔦'}</Text>
+        
+        {/* Hangi kamerayı kullandığını görelim (Test Amaçlı) */}
+        <Text style={{color:'gray', position:'absolute', bottom: 130, fontSize:10}}>
+            Aktif Kamera: {device.name || device.id} ({device.position})
+        </Text>
       </View>
 
       <View style={styles.bottomBar}>
@@ -244,7 +269,7 @@ function App(): React.JSX.Element {
 // --- STİLLER ---
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'black' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111' }, // Center stili güncellendi
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111' },
   topBar: { position:'absolute', top:40, left:20, right:20, zIndex:10, flexDirection:'row', justifyContent:'space-between', alignItems:'center' },
   ipInput: { backgroundColor:'white', width:150, height:40, borderRadius:8, paddingHorizontal:10, color:'black', textAlign:'center' },
   iconBtn: { backgroundColor:'rgba(255,255,255,0.8)', width:40, height:40, borderRadius:20, justifyContent:'center', alignItems:'center' },
