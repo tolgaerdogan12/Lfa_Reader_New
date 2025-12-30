@@ -4,9 +4,6 @@ on:
   push:
     branches: [ main ]
 
-env:
-  ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
-
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -32,22 +29,17 @@ jobs:
       - name: Gradle İzinlerini Ver
         run: chmod +x android/gradlew
 
-      # --- BUKALEMUN TAKTİĞİ BURADA ---
-      - name: NDK 26'yı NDK 27 Gibi Göster (Hile)
+      # --- İŞTE SİHİRLİ DOKUNUŞ BURASI ---
+      # Sistem ne derse desin, local.properties dosyası son sözü söyler.
+      - name: Create local.properties (Force NDK Path)
         run: |
-          echo "NDK 27 klasörü temizleniyor..."
-          sudo rm -rf /usr/local/lib/android/sdk/ndk/27.0.12077973
-          
-          echo "NDK 26, NDK 27 kılığına giriyor..."
-          # NDK 26 klasörüne '27.0.12077973' adıyla sembolik link veriyoruz
-          sudo ln -s /usr/local/lib/android/sdk/ndk/26.1.10909125 /usr/local/lib/android/sdk/ndk/27.0.12077973
-          
-          echo "İşlem Tamam! Sistem artık NDK 27 var sanıyor ama 26 kullanacak."
-      # -------------------------------
+          echo "ndk.dir=/usr/local/lib/android/sdk/ndk/26.1.10909125" > android/local.properties
+          echo "sdk.dir=/usr/local/lib/android/sdk" >> android/local.properties
+          cat android/local.properties
+      # -----------------------------------
 
       - name: APK Oluştur (Release)
         working-directory: android
-        # Buradaki -Pandroid.ndkVersion kısmını kaldırdık çünkü artık kandırmaca yapıyoruz
         run: ./gradlew assembleRelease --no-daemon
 
       - name: APK'yı Yükle (Artifacts)
