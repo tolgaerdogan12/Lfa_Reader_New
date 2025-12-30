@@ -29,21 +29,30 @@ jobs:
       - name: Gradle İzinlerini Ver
         run: chmod +x android/gradlew
 
-      # --- EKSİK OLAN PARÇA BU: İNDİRME ADIMI ---
+      # 1. ADIM: NDK 26'YI İNDİRİYORUZ (Çünkü sistemde yok)
       - name: NDK 26'yı İndir ve Kur
         run: |
           echo "Lisanslar kabul ediliyor ve NDK 26 indiriliyor..."
           echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
-      # ------------------------------------------
 
-      # --- SONRA ZORLA ORAYA BAKTIRIYORUZ ---
+      # 2. ADIM: PROJEYE "BU NDK'YI KULLAN" DİYORUZ
       - name: Create local.properties (Force NDK Path)
         run: |
           echo "ndk.dir=$ANDROID_HOME/ndk/26.1.10909125" > android/local.properties
           echo "sdk.dir=$ANDROID_HOME" >> android/local.properties
-          cat android/local.properties
-      # --------------------------------------
 
+      # 3. ADIM: AMELİYAT (DOSYA İÇİNDEKİ "27" YAZISINI "26" YAPIYORUZ)
+      - name: Gradle Dosyasını Zorla Düzelt (27 -> 26)
+        run: |
+          echo "build.gradle içindeki versiyon uyumsuzluğu gideriliyor..."
+          # Bu komut dosyanın içindeki 'ndkVersion = ...' satırını bulur ve 26 ile değiştirir.
+          sed -i 's/ndkVersion = .*/ndkVersion = "26.1.10909125"/' android/build.gradle
+          
+          # Kontrol edelim, doğru değişmiş mi?
+          echo "Yeni Ayar:"
+          grep "ndkVersion" android/build.gradle
+
+      # 4. ADIM: BUİLD VE FİNAL
       - name: APK Oluştur (Release)
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon
