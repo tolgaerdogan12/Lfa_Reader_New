@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -10,72 +10,28 @@ import {
   TextInput,
   ScrollView,
   Dimensions,
-  Linking,
 } from 'react-native';
-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
-import { launchImageLibrary } from 'react-native-image-picker';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
 const DEFAULT_IP = "192.168.1.127";
 const { width } = Dimensions.get('window');
-const FRAME_WIDTH = width * 0.8;
-const FRAME_HEIGHT = FRAME_WIDTH * 0.4;
 
 function App(): React.JSX.Element {
+  // STATE'LER
   const [ip, setIp] = useState(DEFAULT_IP);
   const [photoPath, setPhotoPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
   const [showHistory, setShowHistory] = useState(false);
-  const [torch, setTorch] = useState<'off' | 'on'>('off');
-  
-  // --- KAMERA SEÇİM MANTIĞI (MANUEL FALLBACK) ---
-  const [manualDevice, setManualDevice] = useState<any>(null);
-  const [debugMsg, setDebugMsg] = useState("Başlatılıyor...");
 
-  // İzinler
-  const { hasPermission, requestPermission } = useCameraPermission();
-  
-  // 1. Yöntem: Standart Hook (Önce bunu dener)
-  const hookDevice = useCameraDevice('back');
-
-  // 2. Yöntem: Manuel Tarama (Hook bulamazsa devreye girer)
   useEffect(() => {
-    const findCamera = async () => {
-      const status = await requestPermission();
-      if (!status) return;
-
-      // Eğer standart hook bir şey bulduysa onu kullanalım
-      if (hookDevice) {
-        setDebugMsg("Otomatik kamera bulundu.");
-        return;
-      }
-
-      // Bulamadıysa manuel tarama yap
-      setDebugMsg("Manuel kamera aranıyor...");
-      const devices = Camera.getAvailableCameraDevices();
-      setDebugMsg(`Bulunan Cihaz Sayısı: ${devices.length}`);
-
-      if (devices.length > 0) {
-        // Genelde 'back' (arka) kameraları filtrele, yoksa ilkini al
-        const bestDevice = devices.find(d => d.position === 'back') || devices[0];
-        setManualDevice(bestDevice);
-      } else {
-        setDebugMsg("HİÇ KAMERA BULUNAMADI!");
-      }
-    };
-
-    findCamera();
     loadHistory();
-  }, [hookDevice]); // hookDevice değişirse tekrar kontrol et
+  }, []);
 
-  // Nihai Cihaz: Hook varsa o, yoksa manuel bulunan
-  const device = hookDevice || manualDevice;
-  const camera = useRef<Camera>(null);
-
-  // --- DİĞER FONKSİYONLAR ---
+  // --- GEÇMİŞ YÖNETİMİ ---
   const loadHistory = async () => {
     try {
       const jsonValue = await AsyncStorage.getItem('@lfa_history');
@@ -99,32 +55,39 @@ function App(): React.JSX.Element {
     ]);
   };
 
-  const toggleTorch = () => {
-    setTorch(t => (t === 'off' ? 'on' : 'off'));
-  };
+  // --- KAMERA VE GALERİ ---
+  
+  // 1. KAMERA AÇ (SİSTEM KAMERASI)
+  const openCamera = async () => {
+    const result = await launchCamera({
+      mediaType: 'photo',
+      saveToPhotos: false,
+      cameraType: 'back',
+      quality: 1,
+    });
 
-  const takePhoto = async () => {
-    if (camera.current) {
-      try {
-        const photo = await camera.current.takePhoto({ flash: 'off' });
-        setPhotoPath(`file://${photo.path}`);
-      } catch (e) { Alert.alert("Hata", "Çekilemedi: " + e); }
+    if (result.errorMessage) {
+      Alert.alert("Hata", result.errorMessage);
+    } else if (result.assets && result.assets[0].uri) {
+      setPhotoPath(result.assets[0].uri);
     }
   };
 
-  const pickFromGallery = async () => {
+  // 2. GALERİ AÇ
+  const openGallery = async () => {
     const result = await launchImageLibrary({ mediaType: 'photo', selectionLimit: 1 });
     if (result.assets && result.assets[0].uri) setPhotoPath(result.assets[0].uri);
   };
 
+  // 3. ANALİZ ET
   const sendToServer = async () => {
     if (!photoPath) return;
     setLoading(true);
     try {
       const formData = new FormData();
       formData.append('file', { uri: photoPath, type: 'image/jpeg', name: 'upload.jpg' });
-      formData.append('study', 'Mobil_Forced');
-      formData.append('hid', 'Manual_Select');
+      formData.append('study', 'Mobil_SystemCamera');
+      formData.append('hid', 'Native_Picker');
       formData.append('conc', '0');
 
       const url = `http://${ip}:8000/analyze`;
@@ -136,33 +99,7 @@ function App(): React.JSX.Element {
 
   // --- EKRANLAR ---
 
-  // 1. İZİN YOKSA
-  if (!hasPermission) {
-    return (
-      <View style={styles.center}>
-        <Text style={{color:'white', marginBottom:20, fontSize:18}}>Kamera İzni Gerekli</Text>
-        <TouchableOpacity style={{backgroundColor:'#28a745', padding:15, borderRadius:10}} onPress={() => Linking.openSettings()}>
-          <Text style={{color:'white', fontWeight:'bold'}}>AYARLARI AÇ</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  // 2. CİHAZ YÜKLENİYORSA (DEBUG MODU)
-  if (!device) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#fff" />
-        <Text style={{color:'white', marginTop:20, fontSize:16, fontWeight:'bold'}}>Kamera Aranıyor...</Text>
-        <Text style={{color:'#aaa', marginTop:10}}>Durum: {debugMsg}</Text>
-        <TouchableOpacity style={{marginTop:30, backgroundColor:'#555', padding:10, borderRadius:5}} onPress={() => Linking.openSettings()}>
-             <Text style={{color:'white'}}>İzinleri Kontrol Et</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  // 3. GEÇMİŞ
+  // 1. GEÇMİŞ EKRANI
   if (showHistory) {
     return (
       <View style={styles.container}>
@@ -183,7 +120,7 @@ function App(): React.JSX.Element {
     );
   }
 
-  // 4. SONUÇ
+  // 2. SONUÇ EKRANI
   if (result) {
     return (
       <View style={styles.container}>
@@ -200,11 +137,17 @@ function App(): React.JSX.Element {
     );
   }
 
-  // 5. ÖNİZLEME
+  // 3. FOTOĞRAF ÖNİZLEME (ANALİZ EKRANI)
   if (photoPath) {
     return (
       <View style={styles.container}>
         <Image source={{ uri: photoPath }} style={styles.previewImage} />
+        
+        {/* Rehber Çizgileri (Sadece fotoğrafın üstüne görsel olarak ekledik) */}
+        <View style={styles.overlay}>
+           <Text style={{color:'yellow', backgroundColor:'rgba(0,0,0,0.5)', padding:5}}>Analiz İçin Hazır</Text>
+        </View>
+
         <View style={styles.controls}>
           <TouchableOpacity style={styles.btnCancel} onPress={() => setPhotoPath(null)}><Text style={styles.btnText}>İPTAL</Text></TouchableOpacity>
           <TouchableOpacity style={styles.btnSend} onPress={sendToServer} disabled={loading}>
@@ -215,77 +158,48 @@ function App(): React.JSX.Element {
     );
   }
 
-  // 6. KAMERA (ANA EKRAN)
+  // 4. ANA EKRAN (GİRİŞ)
   return (
-    <View style={styles.container}>
-      <View style={styles.topBar}>
-         <TextInput style={styles.ipInput} value={ip} onChangeText={setIp} keyboardType="numeric" />
-         <View style={{flexDirection:'row', gap:10}}>
-            <TouchableOpacity onPress={toggleTorch} style={[styles.iconBtn, {backgroundColor: torch === 'on' ? '#ffd700' : 'rgba(255,255,255,0.8)'}]}>
-                <Text style={{fontSize:20}}>{torch === 'on' ? '⚡' : '🔦'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowHistory(true)} style={styles.iconBtn}>
-                <Text style={{fontSize:20}}>📜</Text>
-            </TouchableOpacity>
-         </View>
-      </View>
-
-      <Camera 
-        ref={camera} 
-        style={StyleSheet.absoluteFill} 
-        device={device} 
-        isActive={true} 
-        photo={true}
-        torch={torch}
-        exposure={0}
-        enableZoomGesture={false} 
-      />
+    <View style={styles.containerCenter}>
+      <Text style={styles.title}>LFA Analizcisi</Text>
       
-      <View style={styles.overlay}>
-        <View style={[styles.guideBox, {width: FRAME_WIDTH, height: FRAME_HEIGHT}]}>
-            <View style={[styles.cornerMarker, {top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4}]} />
-            <View style={[styles.cornerMarker, {top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4}]} />
-            <View style={[styles.cornerMarker, {bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4}]} />
-            <View style={[styles.cornerMarker, {bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4}]} />
-            <View style={styles.centerCross} />
-        </View>
-        <Text style={styles.hint}>{torch === 'on' ? 'Çekime Hazır ⚡' : 'Işığı Aç 🔦'}</Text>
-        
-        {/* Hangi kamerayı kullandığını görelim (Test Amaçlı) */}
-        <Text style={{color:'gray', position:'absolute', bottom: 130, fontSize:10}}>
-            Aktif Kamera: {device.name || device.id} ({device.position})
-        </Text>
-      </View>
+      {/* IP Girişi */}
+      <TextInput style={styles.ipInput} value={ip} onChangeText={setIp} keyboardType="numeric" placeholder="IP Adresi" />
 
-      <View style={styles.bottomBar}>
-        <TouchableOpacity style={styles.galleryBtn} onPress={pickFromGallery}><Text style={{fontSize:24}}>🖼️</Text></TouchableOpacity>
-        <TouchableOpacity style={styles.captureBtn} onPress={takePhoto}><View style={styles.captureBtnInner} /></TouchableOpacity>
-        <View style={{width:50}} /> 
+      {/* Butonlar */}
+      <View style={{width:'80%', gap:20, marginTop:40}}>
+        <TouchableOpacity style={styles.bigButton} onPress={openCamera}>
+            <Text style={styles.bigBtnText}>📸 KAMERA AÇ</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.bigButton, {backgroundColor:'#333'}]} onPress={openGallery}>
+            <Text style={styles.bigBtnText}>🖼️ GALERİDEN SEÇ</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.bigButton, {backgroundColor:'#444'}]} onPress={() => setShowHistory(true)}>
+            <Text style={styles.bigBtnText}>📜 GEÇMİŞ</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
 }
 
-// --- STİLLER ---
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'black' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111' },
-  topBar: { position:'absolute', top:40, left:20, right:20, zIndex:10, flexDirection:'row', justifyContent:'space-between', alignItems:'center' },
-  ipInput: { backgroundColor:'white', width:150, height:40, borderRadius:8, paddingHorizontal:10, color:'black', textAlign:'center' },
-  iconBtn: { backgroundColor:'rgba(255,255,255,0.8)', width:40, height:40, borderRadius:20, justifyContent:'center', alignItems:'center' },
-  overlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  guideBox: { position: 'relative' },
-  cornerMarker: { position: 'absolute', width: 30, height: 30, borderColor: '#00ff00' },
-  centerCross: { position: 'absolute', top: '50%', left: '50%', width: 10, height: 10, backgroundColor: 'rgba(255,255,255,0.5)', borderRadius: 5, transform: [{translateX: -5}, {translateY: -5}] },
-  hint: { color: '#00ff00', fontWeight:'bold', marginTop: 20, backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius:5 },
-  bottomBar: { height: 120, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection:'row', justifyContent:'space-around', alignItems:'center', paddingHorizontal:20 },
-  captureBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'white', justifyContent: 'center', alignItems: 'center' },
-  captureBtnInner: { width: 70, height: 70, borderRadius: 35, borderWidth: 2, borderColor: 'black' },
-  galleryBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#333', justifyContent:'center', alignItems:'center', borderWidth:1, borderColor:'#666' },
+  containerCenter: { flex: 1, backgroundColor: 'black', justifyContent:'center', alignItems:'center' },
+  title: { color:'white', fontSize:30, fontWeight:'bold', marginBottom:20 },
+  ipInput: { backgroundColor:'white', width:200, height:50, borderRadius:10, paddingHorizontal:10, color:'black', textAlign:'center', fontSize:18 },
+  
+  bigButton: { backgroundColor:'#007bff', padding:20, borderRadius:15, alignItems:'center', width:'100%' },
+  bigBtnText: { color:'white', fontSize:20, fontWeight:'bold' },
+
   previewImage: { flex: 1, resizeMode: 'contain' },
+  overlay: { position:'absolute', top:50, alignSelf:'center' },
+  
   controls: { flexDirection: 'row', padding: 20, backgroundColor: 'black', gap: 20 },
   btnCancel: { flex: 1, backgroundColor: '#555', padding: 15, borderRadius: 10, alignItems: 'center' },
   btnSend: { flex: 1, backgroundColor: '#28a745', padding: 15, borderRadius: 10, alignItems: 'center' },
+  
   resultCard: { backgroundColor: '#222', margin: 20, padding: 20, borderRadius: 20, alignItems: 'center', marginTop: 100 },
   resultTitle: { color: 'white', fontSize: 24, fontWeight: 'bold', marginBottom: 20 },
   ratioText: { color: '#28a745', fontSize: 60, fontWeight: 'bold' },
@@ -294,6 +208,7 @@ const styles = StyleSheet.create({
   label: { color: '#aaa', fontSize: 12 },
   value: { color: 'white', fontSize: 20, fontWeight: 'bold' },
   btnRetake: { backgroundColor: 'white', padding: 15, borderRadius: 30, width: '100%', alignItems: 'center' },
+  
   btnText: { fontWeight: 'bold', color: 'white', fontSize:16 },
   header: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', padding:20, paddingTop:50, backgroundColor:'#222' },
   headerTitle: { color:'white', fontSize:18, fontWeight:'bold' },
