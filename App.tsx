@@ -59,10 +59,17 @@ export default function App() {
   const handleSelectPhoto = async (type: 'camera' | 'library') => {
     const options = {
       mediaType: 'photo' as const,
-      quality: 0.8, // Transfer hızı için kaliteyi biraz kıstık (Motor etkilenmez)
-      includeBase64: true, // <--- İŞTE SİHİRLİ ANAHTAR BU
+      
+      // KRİTİK AYARLAR BURADA:
+      quality: 0.9,       // Kaliteyi %90'da tut (Çizgiler net kalsın, çamurlaşmasın)
+      maxWidth: 1024,     // Genişliği max 1024px yap (Motor zaten 600px kullanıyor)
+      maxHeight: 1280,    // Yüksekliği max 1280px yap (Motor zaten 1200px kullanıyor)
+      
+      includeBase64: true, // Base64 modu açık
       saveToPhotos: true,
     };
+
+    // ... kodun geri kalanı aynı ...
 
     const callback = (response: any) => {
       if (response.didCancel) return;
