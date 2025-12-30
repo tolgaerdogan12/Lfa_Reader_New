@@ -14,18 +14,17 @@ import {
 import { launchCamera, launchImageLibrary, Asset } from 'react-native-image-picker';
 
 // --- SUNUCU AYARLARI ---
-// Usta buraya kendi bilgisayarının IP adresini yazmayı unutma!
-// Emulator kullanıyorsan 10.0.2.2, gerçek telefonda ise 192.168.x.x
-const SERVER_URL = 'http://192.168.1.100:5000'; 
+// DİKKAT: Buraya bilgisayarının yerel IP adresini yazmalısın.
+// Emulator için: 'http://10.0.2.2:5000'
+// Gerçek Telefon için: 'http://192.168.1.XX:5000' (Bilgisayarının IP'si neyse o)
+const SERVER_URL = 'http://192.168.1.25:5000'; 
 
 export default function App() {
   const [photo, setPhoto] = useState<Asset | null>(null);
   const [loading, setLoading] = useState(false);
-  
-  // Sunucudan gelen tüm veriyi burada tutacağız
   const [result, setResult] = useState<any>(null);
 
-  // Fotoğraf Seçme / Çekme
+  // Fotoğraf Seçme Fonksiyonu
   const handleSelectPhoto = (type: 'camera' | 'library') => {
     const options = {
       mediaType: 'photo' as const,
@@ -41,15 +40,15 @@ export default function App() {
       }
       if (response.assets && response.assets.length > 0) {
         setPhoto(response.assets[0]);
-        setResult(null); // Yeni foto seçince eski sonucu sil
+        setResult(null); // Yeni fotoğraf seçilince eski sonucu temizle
       }
     };
 
-    if (type === 'camera') launchCamera(options, callback);
-    else launchImageLibrary(options, callback);
+    if (type === 'camera') launchCamera(options as any, callback);
+    else launchImageLibrary(options as any, callback);
   };
 
-  // Analiz Gönderme
+  // Analiz Gönderme Fonksiyonu
   const handleAnalyze = async () => {
     if (!photo) {
       Alert.alert('Uyarı', 'Lütfen önce bir fotoğraf seçin.');
@@ -57,6 +56,8 @@ export default function App() {
     }
 
     setLoading(true);
+    
+    // Fotoğrafı Form Data olarak hazırla
     const formData = new FormData();
     formData.append('file', {
       uri: Platform.OS === 'ios' ? photo.uri?.replace('file://', '') : photo.uri,
@@ -65,6 +66,7 @@ export default function App() {
     });
 
     try {
+      // Sunucuya gönder
       const response = await fetch(`${SERVER_URL}/analyze`, {
         method: 'POST',
         body: formData,
@@ -74,26 +76,25 @@ export default function App() {
       });
 
       const data = await response.json();
-      console.log("Sunucu Cevabı:", data); // Debug için konsola bas
+      console.log("Sunucu Cevabı:", data); // Konsoldan takip etmek için
 
       if (data.success) {
         // --- BAŞARILI ---
         setResult(data);
         
-        // Eğer sunucudan "Warning" geldiyse (Örn: Bulanık resim) uyarı ver
+        // Eğer sunucu "Bulanık" uyarısı verdiyse kullanıcıya göster
         if (data.warning) {
           Alert.alert("Dikkat", data.warning);
         }
       } else {
-        // --- HATA (Motor çalıştı ama hata döndü) ---
-        // Örn: "Dosya okunamadı" veya Python tarafındaki bir exception
+        // --- HATA (Motor çalıştı ama bir sorun var) ---
         setResult(null);
         Alert.alert("Analiz Hatası", data.error || "Bilinmeyen bir hata oluştu.");
       }
 
     } catch (error) {
       // --- AĞ HATASI ---
-      Alert.alert("Bağlantı Hatası", "Sunucuya ulaşılamadı. IP adresini kontrol et.");
+      Alert.alert("Bağlantı Hatası", "Sunucuya ulaşılamadı. IP adresini ve interneti kontrol et.");
       console.error(error);
     } finally {
       setLoading(false);
@@ -135,19 +136,20 @@ export default function App() {
           {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnTextPrimary}>ANALİZ ET</Text>}
         </TouchableOpacity>
 
-        {/* --- SONUÇ EKRANI (DİNAMİK) --- */}
+        {/* --- SONUÇ KARTI --- */}
         {result && (
           <View style={styles.resultCard}>
             <Text style={styles.resultTitle}>Sonuç: {parseFloat(result.ratio).toFixed(4)}</Text>
             
-            {/* Netlik ve Uyarı Bilgisi */}
+            {/* Netlik Bilgisi */}
             <View style={styles.infoRow}>
               <Text style={styles.label}>Netlik Skoru:</Text>
-              <Text style={[styles.value, result.blur_score < 15 ? styles.textDanger : styles.textSuccess]}>
+              <Text style={[styles.value, (result.blur_score || 0) < 15 ? styles.textDanger : styles.textSuccess]}>
                 {result.blur_score ? result.blur_score.toFixed(1) : "N/A"}
               </Text>
             </View>
 
+            {/* Uyarı Kutusu (Sarı) */}
             {result.warning ? (
               <View style={styles.warningBox}>
                 <Text style={styles.warningText}>⚠️ {result.warning}</Text>
@@ -166,23 +168,15 @@ export default function App() {
               </View>
             </View>
 
-            {/* Grafik Gösterimi */}
+            {/* Grafik Resmi */}
             {result.graph_url && (
                <Image 
-               // Sunucudan dönen URL'nin başına sunucu adresini ekliyoruz (Eğer tam URL dönmüyorsa)
-               // Server.py'da "static" klasörünü serve ettiğimizden emin olmalıyız.
-               // Şimdilik varsayım: graph_path dosya yolu dönüyor.
-               // React Native'de local file path'i image componentte göstermek zordur.
-               // En sağlıklısı server'ın resim URL'si dönmesidir.
-               // *Geçici Çözüm:* Sadece metin gösteriyoruz, resmi indirmek ayrı iş.
-                 source={{ uri: `${SERVER_URL}/static/${result.filename.split('.')[0]}_graph.png?t=${new Date().getTime()}` }} 
+                 // Sunucudan gelen tam yolu kullanıyoruz + Cache engellemek için timestamp ekliyoruz
+                 source={{ uri: `${SERVER_URL}/${result.graph_url}?t=${new Date().getTime()}` }} 
                  style={styles.graphImage} 
                  resizeMode="contain"
                />
             )}
-             {/* Not: Grafik resmi için Server.py tarafında 'static' klasör ayarı yapılmalı. 
-                 Yapmadıysan resim görünmez, sadece metinler görünür. */}
-
           </View>
         )}
 
@@ -215,11 +209,11 @@ const styles = StyleSheet.create({
   btnText: { color: '#333', fontWeight: '600' },
   btnTextPrimary: { color: '#FFF', fontWeight: 'bold', fontSize: 16 },
   
-  // Sonuç Kartı Tasarımı
+  // Sonuç Kartı Stilleri
   resultCard: { 
     width: '100%', backgroundColor: '#FFF', padding: 20, borderRadius: 10,
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 4, elevation: 3
+    shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, marginBottom: 30
   },
   resultTitle: { fontSize: 22, fontWeight: 'bold', color: '#2196F3', textAlign: 'center', marginBottom: 15 },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
@@ -227,9 +221,12 @@ const styles = StyleSheet.create({
   gridItem: { alignItems: 'center', flex: 1 },
   label: { fontSize: 14, color: '#666' },
   value: { fontSize: 18, fontWeight: 'bold', color: '#333' },
-  warningBox: { backgroundColor: '#FFF3CD', padding: 10, borderRadius: 5, marginVertical: 10 },
-  warningText: { color: '#856404', fontSize: 14 },
+  
+  // Uyarı ve Renkler
+  warningBox: { backgroundColor: '#FFF3CD', padding: 10, borderRadius: 5, marginVertical: 10, borderWidth: 1, borderColor: '#FFEEBA' },
+  warningText: { color: '#856404', fontSize: 14, textAlign: 'center' },
   textDanger: { color: '#D32F2F' },
   textSuccess: { color: '#388E3C' },
-  graphImage: { width: '100%', height: 150, marginTop: 15 }
+  
+  graphImage: { width: '100%', height: 200, marginTop: 15, backgroundColor: '#FAFAFA' }
 });
