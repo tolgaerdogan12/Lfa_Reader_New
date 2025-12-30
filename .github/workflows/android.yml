@@ -29,6 +29,13 @@ jobs:
       - name: Gradle İzinlerini Ver
         run: chmod +x android/gradlew
 
+      # --- EKLENEN KISIM BURASI (AŞÇIYA AYAR VERİYORUZ) ---
+      - name: NDK 27'yi Sil (Zorla NDK 26)
+        run: |
+          echo "NDK 27 klasörü siliniyor..."
+          sudo rm -rf /usr/local/lib/android/sdk/ndk/27.0.12077973
+      # ----------------------------------------------------
+
       - name: APK Oluştur (Release)
         working-directory: android
         run: ./gradlew assembleRelease
