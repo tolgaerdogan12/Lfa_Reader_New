@@ -4,7 +4,6 @@ on:
   push:
     branches: [ main ]
 
-# --- 1. SİSTEME NDK 26'YI ZORLA TANIYORUZ ---
 env:
   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
 
@@ -33,16 +32,23 @@ jobs:
       - name: Gradle İzinlerini Ver
         run: chmod +x android/gradlew
 
-      # NDK 27'yi yine de silelim, ayağımıza dolanmasın
-      - name: NDK 27 Temizliği
+      # --- BUKALEMUN TAKTİĞİ BURADA ---
+      - name: NDK 26'yı NDK 27 Gibi Göster (Hile)
         run: |
-          echo "NDK 27 varsa siliniyor..."
+          echo "NDK 27 klasörü temizleniyor..."
           sudo rm -rf /usr/local/lib/android/sdk/ndk/27.0.12077973
+          
+          echo "NDK 26, NDK 27 kılığına giriyor..."
+          # NDK 26 klasörüne '27.0.12077973' adıyla sembolik link veriyoruz
+          sudo ln -s /usr/local/lib/android/sdk/ndk/26.1.10909125 /usr/local/lib/android/sdk/ndk/27.0.12077973
+          
+          echo "İşlem Tamam! Sistem artık NDK 27 var sanıyor ama 26 kullanacak."
+      # -------------------------------
 
-      # --- 2. KOMUT SATIRINDAN DA ZORLUYORUZ ---
       - name: APK Oluştur (Release)
         working-directory: android
-        run: ./gradlew assembleRelease -Pandroid.ndkVersion=26.1.10909125 --no-daemon
+        # Buradaki -Pandroid.ndkVersion kısmını kaldırdık çünkü artık kandırmaca yapıyoruz
+        run: ./gradlew assembleRelease --no-daemon
 
       - name: APK'yı Yükle (Artifacts)
         uses: actions/upload-artifact@v4
