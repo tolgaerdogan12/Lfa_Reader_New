@@ -29,14 +29,20 @@ jobs:
       - name: Gradle İzinlerini Ver
         run: chmod +x android/gradlew
 
-      # --- İŞTE SİHİRLİ DOKUNUŞ BURASI ---
-      # Sistem ne derse desin, local.properties dosyası son sözü söyler.
+      # --- EKSİK OLAN PARÇA BU: İNDİRME ADIMI ---
+      - name: NDK 26'yı İndir ve Kur
+        run: |
+          echo "Lisanslar kabul ediliyor ve NDK 26 indiriliyor..."
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
+      # ------------------------------------------
+
+      # --- SONRA ZORLA ORAYA BAKTIRIYORUZ ---
       - name: Create local.properties (Force NDK Path)
         run: |
-          echo "ndk.dir=/usr/local/lib/android/sdk/ndk/26.1.10909125" > android/local.properties
-          echo "sdk.dir=/usr/local/lib/android/sdk" >> android/local.properties
+          echo "ndk.dir=$ANDROID_HOME/ndk/26.1.10909125" > android/local.properties
+          echo "sdk.dir=$ANDROID_HOME" >> android/local.properties
           cat android/local.properties
-      # -----------------------------------
+      # --------------------------------------
 
       - name: APK Oluştur (Release)
         working-directory: android
