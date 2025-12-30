@@ -1,279 +1,235 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
+  SafeAreaView,
   StyleSheet,
   Text,
   View,
   TouchableOpacity,
-  ActivityIndicator,
-  Alert,
   Image,
-  TextInput,
+  Alert,
+  ActivityIndicator,
   ScrollView,
-  Dimensions,
-  Linking,
+  Platform,
 } from 'react-native';
-import { Camera, useCameraPermission } from 'react-native-vision-camera'; // useCameraDevice SİLDİK
-import { launchImageLibrary } from 'react-native-image-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
+import { launchCamera, launchImageLibrary, Asset } from 'react-native-image-picker';
 
-const DEFAULT_IP = "192.168.1.127";
-const { width } = Dimensions.get('window');
-const FRAME_WIDTH = width * 0.8;
-const FRAME_HEIGHT = FRAME_WIDTH * 0.4;
+// --- SUNUCU AYARLARI ---
+// Usta buraya kendi bilgisayarının IP adresini yazmayı unutma!
+// Emulator kullanıyorsan 10.0.2.2, gerçek telefonda ise 192.168.x.x
+const SERVER_URL = 'http://192.168.1.100:5000'; 
 
-function App(): React.JSX.Element {
-  const [ip, setIp] = useState(DEFAULT_IP);
-  const [photoPath, setPhotoPath] = useState<string | null>(null);
+export default function App() {
+  const [photo, setPhoto] = useState<Asset | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
-  const [history, setHistory] = useState<any[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
-  const [torch, setTorch] = useState<'off' | 'on'>('off');
-
-  // --- KAMERA SEÇİMİ İÇİN ÖZEL STATE ---
-  const [selectedDevice, setSelectedDevice] = useState<any>(null);
-  const [cameraListStr, setCameraListStr] = useState("Aranıyor...");
-
-  const { hasPermission, requestPermission } = useCameraPermission();
-  const camera = useRef<Camera>(null);
-
-  useEffect(() => {
-    checkPermissionsAndDevices();
-    loadHistory();
-  }, []);
-
-  const checkPermissionsAndDevices = async () => {
-    const permission = await requestPermission();
-    if (permission) {
-      // TÜM KAMERALARI ÇEK
-      const devices = Camera.getAvailableCameraDevices();
-      
-      // Ekrana basmak için listeyi metne dök
-      const names = devices.map(d => `${d.position} (${d.id})`).join(', ');
-      setCameraListStr(names || "Liste Boş!");
-
-      if (devices.length > 0) {
-        // 1. Tercih: Arka Kamera
-        const backCam = devices.find(d => d.position === 'back');
-        // 2. Tercih: Herhangi bir ilk kamera
-        const anyCam = devices[0];
-        
-        // Hangisi varsa onu seç
-        setSelectedDevice(backCam || anyCam);
-      }
-    }
-  };
-
-  // --- STANDART İŞLEVLER ---
-  const loadHistory = async () => {
-    try {
-      const jsonValue = await AsyncStorage.getItem('@lfa_history');
-      if (jsonValue != null) setHistory(JSON.parse(jsonValue));
-    } catch(e) {}
-  };
   
-  // ... (Buradaki saveToHistory ve clearHistory fonksiyonları aynı kalacak)
-   const saveToHistory = async (newResult: any) => {
+  // Sunucudan gelen tüm veriyi burada tutacağız
+  const [result, setResult] = useState<any>(null);
+
+  // Fotoğraf Seçme / Çekme
+  const handleSelectPhoto = (type: 'camera' | 'library') => {
+    const options = {
+      mediaType: 'photo' as const,
+      quality: 1,
+      saveToPhotos: true,
+    };
+
+    const callback = (response: any) => {
+      if (response.didCancel) return;
+      if (response.errorCode) {
+        Alert.alert('Hata', response.errorMessage);
+        return;
+      }
+      if (response.assets && response.assets.length > 0) {
+        setPhoto(response.assets[0]);
+        setResult(null); // Yeni foto seçince eski sonucu sil
+      }
+    };
+
+    if (type === 'camera') launchCamera(options, callback);
+    else launchImageLibrary(options, callback);
+  };
+
+  // Analiz Gönderme
+  const handleAnalyze = async () => {
+    if (!photo) {
+      Alert.alert('Uyarı', 'Lütfen önce bir fotoğraf seçin.');
+      return;
+    }
+
+    setLoading(true);
+    const formData = new FormData();
+    formData.append('file', {
+      uri: Platform.OS === 'ios' ? photo.uri?.replace('file://', '') : photo.uri,
+      type: photo.type,
+      name: photo.fileName || 'test_image.jpg',
+    });
+
     try {
-      const record = { ...newResult, date: new Date().toLocaleString(), id: Date.now().toString() };
-      const updatedHistory = [record, ...history];
-      setHistory(updatedHistory);
-      await AsyncStorage.setItem('@lfa_history', JSON.stringify(updatedHistory));
-    } catch (e) {}
-  };
+      const response = await fetch(`${SERVER_URL}/analyze`, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
 
-  const clearHistory = async () => {
-    Alert.alert("Sil?", "Tüm geçmiş silinecek.", [
-      { text: "Vazgeç", style: "cancel" },
-      { text: "SİL", style: 'destructive', onPress: async () => { await AsyncStorage.removeItem('@lfa_history'); setHistory([]); } }
-    ]);
-  };
+      const data = await response.json();
+      console.log("Sunucu Cevabı:", data); // Debug için konsola bas
 
-  const toggleTorch = () => {
-    setTorch(t => (t === 'off' ? 'on' : 'off'));
-  };
+      if (data.success) {
+        // --- BAŞARILI ---
+        setResult(data);
+        
+        // Eğer sunucudan "Warning" geldiyse (Örn: Bulanık resim) uyarı ver
+        if (data.warning) {
+          Alert.alert("Dikkat", data.warning);
+        }
+      } else {
+        // --- HATA (Motor çalıştı ama hata döndü) ---
+        // Örn: "Dosya okunamadı" veya Python tarafındaki bir exception
+        setResult(null);
+        Alert.alert("Analiz Hatası", data.error || "Bilinmeyen bir hata oluştu.");
+      }
 
-  const takePhoto = async () => {
-    if (camera.current) {
-      try {
-        const photo = await camera.current.takePhoto({ flash: 'off' });
-        setPhotoPath(`file://${photo.path}`);
-      } catch (e) { Alert.alert("Hata", "Çekilemedi: " + e); }
+    } catch (error) {
+      // --- AĞ HATASI ---
+      Alert.alert("Bağlantı Hatası", "Sunucuya ulaşılamadı. IP adresini kontrol et.");
+      console.error(error);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const pickFromGallery = async () => {
-    const result = await launchImageLibrary({ mediaType: 'photo', selectionLimit: 1 });
-    if (result.assets && result.assets[0].uri) setPhotoPath(result.assets[0].uri);
-  };
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContainer}>
+        
+        <Text style={styles.header}>LFA Analiz V17</Text>
 
-  const sendToServer = async () => {
-    if (!photoPath) return;
-    setLoading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', { uri: photoPath, type: 'image/jpeg', name: 'upload.jpg' });
-      formData.append('study', 'Mobil_Manual_Select');
-      formData.append('hid', 'No_Worklets');
-      formData.append('conc', '0');
-
-      const url = `http://${ip}:8000/analyze`;
-      const response = await axios.post(url, formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 15000 });
-      setResult(response.data);
-      saveToHistory(response.data);
-    } catch (error: any) { Alert.alert("HATA", error.message); } finally { setLoading(false); }
-  };
-
-  // --- EKRANLAR ---
-  if (!hasPermission) return <View style={styles.center}><Text style={{color:'white'}}>İzin Verilmedi</Text></View>;
-
-  if (showHistory) {
-      return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => setShowHistory(false)} style={styles.btnSmall}><Text style={styles.btnText}>GERİ</Text></TouchableOpacity>
-          <Text style={styles.headerTitle}>GEÇMİŞ</Text>
-          <TouchableOpacity onPress={clearHistory} style={[styles.btnSmall, {backgroundColor:'#d9534f'}]}><Text style={styles.btnText}>SİL</Text></TouchableOpacity>
-        </View>
-        <ScrollView style={{flex:1, padding:10}}>
-          {history.map((item) => (
-            <View key={item.id} style={styles.historyItem}>
-              <View><Text style={styles.historyRatio}>{item.ratio} Ratio</Text><Text style={styles.historyDate}>{item.date}</Text></View>
-              <View><Text style={{color:'#aaa'}}>C: {item.c_val}</Text><Text style={{color:'#aaa'}}>T: {item.t_val}</Text></View>
+        {/* FOTOĞRAF ALANI */}
+        <View style={styles.imageContainer}>
+          {photo ? (
+            <Image source={{ uri: photo.uri }} style={styles.previewImage} resizeMode="contain" />
+          ) : (
+            <View style={styles.placeholder}>
+              <Text style={styles.placeholderText}>Fotoğraf Yok</Text>
             </View>
-          ))}
-        </ScrollView>
-      </View>
-    );
-  }
-
-  if (result) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.resultCard}>
-          <Text style={styles.resultTitle}>SONUÇ</Text>
-          <Text style={styles.ratioText}>{result.ratio}</Text>
-          <View style={styles.row}>
-            <View style={styles.box}><Text style={styles.label}>C</Text><Text style={styles.value}>{result.c_val}</Text></View>
-            <View style={styles.box}><Text style={styles.label}>T</Text><Text style={styles.value}>{result.t_val}</Text></View>
-          </View>
-          <TouchableOpacity style={styles.btnRetake} onPress={() => { setResult(null); setPhotoPath(null); }}><Text style={[styles.btnText, {color:'black'}]}>TAMAM</Text></TouchableOpacity>
+          )}
         </View>
-      </View>
-    );
-  }
 
-  if (photoPath) {
-    return (
-      <View style={styles.container}>
-        <Image source={{ uri: photoPath }} style={styles.previewImage} />
-        <View style={styles.controls}>
-          <TouchableOpacity style={styles.btnCancel} onPress={() => setPhotoPath(null)}><Text style={styles.btnText}>İPTAL</Text></TouchableOpacity>
-          <TouchableOpacity style={styles.btnSend} onPress={sendToServer} disabled={loading}>
-            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>ANALİZ ET</Text>}
+        {/* BUTONLAR */}
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.btnSecondary} onPress={() => handleSelectPhoto('camera')}>
+            <Text style={styles.btnText}>Kamera</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.btnSecondary} onPress={() => handleSelectPhoto('library')}>
+            <Text style={styles.btnText}>Galeri</Text>
           </TouchableOpacity>
         </View>
-      </View>
-    );
-  }
 
-  // --- KAMERA BULUNAMADIYSA (DEBUG EKRANI) ---
-  if (!selectedDevice) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="white" />
-        <Text style={{color:'white', marginTop:20, fontWeight:'bold'}}>Kamera Aranıyor...</Text>
-        <Text style={{color:'#aaa', marginTop:10, textAlign:'center', padding:20}}>
-            Bulunanlar: {cameraListStr}
-        </Text>
-        <Text style={{color:'red', marginTop:10}}>Hala açılmıyorsa cihaz desteklemiyor olabilir.</Text>
-      </View>
-    );
-  }
+        <TouchableOpacity 
+          style={[styles.btnPrimary, loading && styles.btnDisabled]} 
+          onPress={handleAnalyze}
+          disabled={loading}
+        >
+          {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnTextPrimary}>ANALİZ ET</Text>}
+        </TouchableOpacity>
 
-  // --- ANA KAMERA EKRANI ---
-  return (
-    <View style={styles.container}>
-      <View style={styles.topBar}>
-         <TextInput style={styles.ipInput} value={ip} onChangeText={setIp} keyboardType="numeric" />
-         <View style={{flexDirection:'row', gap:10}}>
-            <TouchableOpacity onPress={toggleTorch} style={[styles.iconBtn, {backgroundColor: torch === 'on' ? '#ffd700' : 'rgba(255,255,255,0.8)'}]}>
-                <Text style={{fontSize:20}}>{torch === 'on' ? '⚡' : '🔦'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowHistory(true)} style={styles.iconBtn}>
-                <Text style={{fontSize:20}}>📜</Text>
-            </TouchableOpacity>
-         </View>
-      </View>
+        {/* --- SONUÇ EKRANI (DİNAMİK) --- */}
+        {result && (
+          <View style={styles.resultCard}>
+            <Text style={styles.resultTitle}>Sonuç: {parseFloat(result.ratio).toFixed(4)}</Text>
+            
+            {/* Netlik ve Uyarı Bilgisi */}
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Netlik Skoru:</Text>
+              <Text style={[styles.value, result.blur_score < 15 ? styles.textDanger : styles.textSuccess]}>
+                {result.blur_score ? result.blur_score.toFixed(1) : "N/A"}
+              </Text>
+            </View>
 
-      <Camera 
-        ref={camera} 
-        style={StyleSheet.absoluteFill} 
-        device={selectedDevice} 
-        isActive={true} 
-        photo={true}
-        torch={torch}
-        exposure={0}
-        enableZoomGesture={false} 
-      />
-      
-      <View style={styles.overlay}>
-        <View style={[styles.guideBox, {width: FRAME_WIDTH, height: FRAME_HEIGHT}]}>
-            <View style={[styles.cornerMarker, {top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4}]} />
-            <View style={[styles.cornerMarker, {top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4}]} />
-            <View style={[styles.cornerMarker, {bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4}]} />
-            <View style={[styles.cornerMarker, {bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4}]} />
-            <View style={styles.centerCross} />
-        </View>
-        {/* DEBUG BİLGİSİ */}
-        <Text style={{color:'rgba(255,255,255,0.5)', marginTop:20, fontSize:10}}>
-            Aktif: {selectedDevice.position} ({selectedDevice.id})
-        </Text>
-      </View>
+            {result.warning ? (
+              <View style={styles.warningBox}>
+                <Text style={styles.warningText}>⚠️ {result.warning}</Text>
+              </View>
+            ) : null}
 
-      <View style={styles.bottomBar}>
-        <TouchableOpacity style={styles.galleryBtn} onPress={pickFromGallery}><Text style={{fontSize:24}}>🖼️</Text></TouchableOpacity>
-        <TouchableOpacity style={styles.captureBtn} onPress={takePhoto}><View style={styles.captureBtnInner} /></TouchableOpacity>
-        <View style={{width:50}} /> 
-      </View>
-    </View>
+            {/* C ve T Değerleri */}
+            <View style={styles.grid}>
+              <View style={styles.gridItem}>
+                <Text style={styles.label}>Control (C)</Text>
+                <Text style={styles.value}>{parseInt(result.c_val)}</Text>
+              </View>
+              <View style={styles.gridItem}>
+                <Text style={styles.label}>Test (T)</Text>
+                <Text style={styles.value}>{parseInt(result.t_val)}</Text>
+              </View>
+            </View>
+
+            {/* Grafik Gösterimi */}
+            {result.graph_url && (
+               <Image 
+               // Sunucudan dönen URL'nin başına sunucu adresini ekliyoruz (Eğer tam URL dönmüyorsa)
+               // Server.py'da "static" klasörünü serve ettiğimizden emin olmalıyız.
+               // Şimdilik varsayım: graph_path dosya yolu dönüyor.
+               // React Native'de local file path'i image componentte göstermek zordur.
+               // En sağlıklısı server'ın resim URL'si dönmesidir.
+               // *Geçici Çözüm:* Sadece metin gösteriyoruz, resmi indirmek ayrı iş.
+                 source={{ uri: `${SERVER_URL}/static/${result.filename.split('.')[0]}_graph.png?t=${new Date().getTime()}` }} 
+                 style={styles.graphImage} 
+                 resizeMode="contain"
+               />
+            )}
+             {/* Not: Grafik resmi için Server.py tarafında 'static' klasör ayarı yapılmalı. 
+                 Yapmadıysan resim görünmez, sadece metinler görünür. */}
+
+          </View>
+        )}
+
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: 'black' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#111' },
-  topBar: { position:'absolute', top:40, left:20, right:20, zIndex:10, flexDirection:'row', justifyContent:'space-between', alignItems:'center' },
-  ipInput: { backgroundColor:'white', width:150, height:40, borderRadius:8, paddingHorizontal:10, color:'black', textAlign:'center' },
-  iconBtn: { backgroundColor:'rgba(255,255,255,0.8)', width:40, height:40, borderRadius:20, justifyContent:'center', alignItems:'center' },
-  overlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  guideBox: { position: 'relative' },
-  cornerMarker: { position: 'absolute', width: 30, height: 30, borderColor: '#00ff00' },
-  centerCross: { position: 'absolute', top: '50%', left: '50%', width: 10, height: 10, backgroundColor: 'rgba(255,255,255,0.5)', borderRadius: 5, transform: [{translateX: -5}, {translateY: -5}] },
-  bottomBar: { height: 120, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection:'row', justifyContent:'space-around', alignItems:'center', paddingHorizontal:20 },
-  captureBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'white', justifyContent: 'center', alignItems: 'center' },
-  captureBtnInner: { width: 70, height: 70, borderRadius: 35, borderWidth: 2, borderColor: 'black' },
-  galleryBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#333', justifyContent:'center', alignItems:'center', borderWidth:1, borderColor:'#666' },
-  previewImage: { flex: 1, resizeMode: 'contain' },
-  controls: { flexDirection: 'row', padding: 20, backgroundColor: 'black', gap: 20 },
-  btnCancel: { flex: 1, backgroundColor: '#555', padding: 15, borderRadius: 10, alignItems: 'center' },
-  btnSend: { flex: 1, backgroundColor: '#28a745', padding: 15, borderRadius: 10, alignItems: 'center' },
-  resultCard: { backgroundColor: '#222', margin: 20, padding: 20, borderRadius: 20, alignItems: 'center', marginTop: 100 },
-  resultTitle: { color: 'white', fontSize: 24, fontWeight: 'bold', marginBottom: 20 },
-  ratioText: { color: '#28a745', fontSize: 60, fontWeight: 'bold' },
-  row: { flexDirection: 'row', gap: 20, marginVertical: 20 },
-  box: { backgroundColor: '#444', padding: 15, borderRadius: 10, width: 100, alignItems: 'center' },
-  label: { color: '#aaa', fontSize: 12 },
-  value: { color: 'white', fontSize: 20, fontWeight: 'bold' },
-  btnRetake: { backgroundColor: 'white', padding: 15, borderRadius: 30, width: '100%', alignItems: 'center' },
-  btnText: { fontWeight: 'bold', color: 'white', fontSize:16 },
-  header: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', padding:20, paddingTop:50, backgroundColor:'#222' },
-  headerTitle: { color:'white', fontSize:18, fontWeight:'bold' },
-  btnSmall: { padding:8, backgroundColor:'#555', borderRadius:5 },
-  historyItem: { backgroundColor:'#1a1a1a', padding:15, marginBottom:10, borderRadius:10, flexDirection:'row', justifyContent:'space-between', borderLeftWidth:4, borderLeftColor:'#28a745' },
-  historyRatio: { color:'#28a745', fontSize:20, fontWeight:'bold' },
-  historyDate: { color:'#666', fontSize:12, marginTop:5 }
+  container: { flex: 1, backgroundColor: '#F5F5F5' },
+  scrollContainer: { padding: 20, alignItems: 'center' },
+  header: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 20 },
+  imageContainer: { 
+    width: '100%', height: 300, backgroundColor: '#E0E0E0', 
+    justifyContent: 'center', alignItems: 'center', borderRadius: 10, marginBottom: 20, overflow: 'hidden'
+  },
+  previewImage: { width: '100%', height: '100%' },
+  placeholder: { alignItems: 'center' },
+  placeholderText: { color: '#888' },
+  buttonRow: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 15 },
+  btnSecondary: { 
+    flex: 1, backgroundColor: '#FFF', padding: 15, borderRadius: 8, 
+    marginHorizontal: 5, alignItems: 'center', borderWidth: 1, borderColor: '#DDD' 
+  },
+  btnPrimary: { 
+    width: '100%', backgroundColor: '#2196F3', padding: 15, 
+    borderRadius: 8, alignItems: 'center', marginBottom: 20 
+  },
+  btnDisabled: { backgroundColor: '#B0BEC5' },
+  btnText: { color: '#333', fontWeight: '600' },
+  btnTextPrimary: { color: '#FFF', fontWeight: 'bold', fontSize: 16 },
+  
+  // Sonuç Kartı Tasarımı
+  resultCard: { 
+    width: '100%', backgroundColor: '#FFF', padding: 20, borderRadius: 10,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1, shadowRadius: 4, elevation: 3
+  },
+  resultTitle: { fontSize: 22, fontWeight: 'bold', color: '#2196F3', textAlign: 'center', marginBottom: 15 },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  grid: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, borderTopWidth: 1, borderColor: '#EEE', paddingTop: 10 },
+  gridItem: { alignItems: 'center', flex: 1 },
+  label: { fontSize: 14, color: '#666' },
+  value: { fontSize: 18, fontWeight: 'bold', color: '#333' },
+  warningBox: { backgroundColor: '#FFF3CD', padding: 10, borderRadius: 5, marginVertical: 10 },
+  warningText: { color: '#856404', fontSize: 14 },
+  textDanger: { color: '#D32F2F' },
+  textSuccess: { color: '#388E3C' },
+  graphImage: { width: '100%', height: 150, marginTop: 15 }
 });
-
-export default App;
