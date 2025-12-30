@@ -10,21 +10,35 @@ import {
   ActivityIndicator,
   ScrollView,
   Platform,
+  TextInput, // Yeni: IP girmek için eklendi
 } from 'react-native';
 import { launchCamera, launchImageLibrary, Asset } from 'react-native-image-picker';
 
-// --- SUNUCU AYARLARI ---
-// DİKKAT: Buraya bilgisayarının yerel IP adresini yazmalısın.
-// Emulator için: 'http://10.0.2.2:5000'
-// Gerçek Telefon için: 'http://192.168.1.XX:5000' (Bilgisayarının IP'si neyse o)
-const SERVER_URL = 'http://192.168.1.25:5000'; 
-
 export default function App() {
+  // --- STATE ---
   const [photo, setPhoto] = useState<Asset | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
+  
+  // YENİ: IP Adresi artık bir değişken (State)
+  // Varsayılan olarak senin son IP'ni koydum, ama değiştirebilirsin.
+  const [serverIp, setServerIp] = useState('192.168.1.25');
 
-  // Fotoğraf Seçme Fonksiyonu
+  // Helper: Tam URL oluşturucu (http://IP:5000)
+  const getServerUrl = () => {
+    // Kullanıcı http yazdı mı kontrol et, yazmadıysa ekle
+    let ip = serverIp.trim();
+    if (!ip.startsWith('http')) {
+      ip = `http://${ip}`;
+    }
+    // Port numarası (5000) yoksa ekle (Basit kontrol)
+    if (!ip.includes(':')) {
+      ip = `${ip}:5000`;
+    }
+    return ip;
+  };
+
+  // Fotoğraf Seçme
   const handleSelectPhoto = (type: 'camera' | 'library') => {
     const options = {
       mediaType: 'photo' as const,
@@ -40,7 +54,7 @@ export default function App() {
       }
       if (response.assets && response.assets.length > 0) {
         setPhoto(response.assets[0]);
-        setResult(null); // Yeni fotoğraf seçilince eski sonucu temizle
+        setResult(null); 
       }
     };
 
@@ -48,7 +62,7 @@ export default function App() {
     else launchImageLibrary(options as any, callback);
   };
 
-  // Analiz Gönderme Fonksiyonu
+  // Analiz Etme
   const handleAnalyze = async () => {
     if (!photo) {
       Alert.alert('Uyarı', 'Lütfen önce bir fotoğraf seçin.');
@@ -56,8 +70,6 @@ export default function App() {
     }
 
     setLoading(true);
-    
-    // Fotoğrafı Form Data olarak hazırla
     const formData = new FormData();
     formData.append('file', {
       uri: Platform.OS === 'ios' ? photo.uri?.replace('file://', '') : photo.uri,
@@ -65,9 +77,12 @@ export default function App() {
       name: photo.fileName || 'test_image.jpg',
     });
 
+    // Dinamik URL kullanıyoruz
+    const targetUrl = `${getServerUrl()}/analyze`;
+    console.log("İstek Gönderiliyor:", targetUrl);
+
     try {
-      // Sunucuya gönder
-      const response = await fetch(`${SERVER_URL}/analyze`, {
+      const response = await fetch(targetUrl, {
         method: 'POST',
         body: formData,
         headers: {
@@ -76,25 +91,20 @@ export default function App() {
       });
 
       const data = await response.json();
-      console.log("Sunucu Cevabı:", data); // Konsoldan takip etmek için
+      console.log("Cevap Geldi:", data);
 
       if (data.success) {
-        // --- BAŞARILI ---
         setResult(data);
-        
-        // Eğer sunucu "Bulanık" uyarısı verdiyse kullanıcıya göster
         if (data.warning) {
           Alert.alert("Dikkat", data.warning);
         }
       } else {
-        // --- HATA (Motor çalıştı ama bir sorun var) ---
         setResult(null);
-        Alert.alert("Analiz Hatası", data.error || "Bilinmeyen bir hata oluştu.");
+        Alert.alert("Analiz Hatası", data.error || "Bilinmeyen hata.");
       }
 
     } catch (error) {
-      // --- AĞ HATASI ---
-      Alert.alert("Bağlantı Hatası", "Sunucuya ulaşılamadı. IP adresini ve interneti kontrol et.");
+      Alert.alert("Bağlantı Hatası", `Sunucuya ulaşılamadı.\nAdres: ${targetUrl}\nIP adresini kontrol et.`);
       console.error(error);
     } finally {
       setLoading(false);
@@ -105,7 +115,19 @@ export default function App() {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         
-        <Text style={styles.header}>LFA Analiz V17</Text>
+        <Text style={styles.header}>LFA Analiz V17.5</Text>
+
+        {/* --- YENİ: IP ADRESİ AYARI --- */}
+        <View style={styles.ipContainer}>
+          <Text style={styles.ipLabel}>Sunucu IP Adresi:</Text>
+          <TextInput
+            style={styles.ipInput}
+            value={serverIp}
+            onChangeText={setServerIp}
+            placeholder="Örn: 192.168.1.25"
+            keyboardType="numeric" // Telefondan kolay giriş için
+          />
+        </View>
 
         {/* FOTOĞRAF ALANI */}
         <View style={styles.imageContainer}>
@@ -113,7 +135,7 @@ export default function App() {
             <Image source={{ uri: photo.uri }} style={styles.previewImage} resizeMode="contain" />
           ) : (
             <View style={styles.placeholder}>
-              <Text style={styles.placeholderText}>Fotoğraf Yok</Text>
+              <Text style={styles.placeholderText}>Fotoğraf Seçilmedi</Text>
             </View>
           )}
         </View>
@@ -121,10 +143,10 @@ export default function App() {
         {/* BUTONLAR */}
         <View style={styles.buttonRow}>
           <TouchableOpacity style={styles.btnSecondary} onPress={() => handleSelectPhoto('camera')}>
-            <Text style={styles.btnText}>Kamera</Text>
+            <Text style={styles.btnText}>📸 Kamera</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.btnSecondary} onPress={() => handleSelectPhoto('library')}>
-            <Text style={styles.btnText}>Galeri</Text>
+            <Text style={styles.btnText}>🖼️ Galeri</Text>
           </TouchableOpacity>
         </View>
 
@@ -133,7 +155,7 @@ export default function App() {
           onPress={handleAnalyze}
           disabled={loading}
         >
-          {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnTextPrimary}>ANALİZ ET</Text>}
+          {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnTextPrimary}>ANALİZ BAŞLAT</Text>}
         </TouchableOpacity>
 
         {/* --- SONUÇ KARTI --- */}
@@ -141,7 +163,6 @@ export default function App() {
           <View style={styles.resultCard}>
             <Text style={styles.resultTitle}>Sonuç: {parseFloat(result.ratio).toFixed(4)}</Text>
             
-            {/* Netlik Bilgisi */}
             <View style={styles.infoRow}>
               <Text style={styles.label}>Netlik Skoru:</Text>
               <Text style={[styles.value, (result.blur_score || 0) < 15 ? styles.textDanger : styles.textSuccess]}>
@@ -149,14 +170,12 @@ export default function App() {
               </Text>
             </View>
 
-            {/* Uyarı Kutusu (Sarı) */}
             {result.warning ? (
               <View style={styles.warningBox}>
                 <Text style={styles.warningText}>⚠️ {result.warning}</Text>
               </View>
             ) : null}
 
-            {/* C ve T Değerleri */}
             <View style={styles.grid}>
               <View style={styles.gridItem}>
                 <Text style={styles.label}>Control (C)</Text>
@@ -168,11 +187,10 @@ export default function App() {
               </View>
             </View>
 
-            {/* Grafik Resmi */}
+            {/* Grafik Resmi: Dinamik IP kullanarak */}
             {result.graph_url && (
                <Image 
-                 // Sunucudan gelen tam yolu kullanıyoruz + Cache engellemek için timestamp ekliyoruz
-                 source={{ uri: `${SERVER_URL}/${result.graph_url}?t=${new Date().getTime()}` }} 
+                 source={{ uri: `${getServerUrl()}/${result.graph_url}?t=${new Date().getTime()}` }} 
                  style={styles.graphImage} 
                  resizeMode="contain"
                />
@@ -188,14 +206,27 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F5F5' },
   scrollContainer: { padding: 20, alignItems: 'center' },
-  header: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 20 },
+  header: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 15 },
+  
+  // IP Ayar Stilleri
+  ipContainer: { 
+    width: '100%', marginBottom: 15, padding: 10, 
+    backgroundColor: '#FFF', borderRadius: 8, borderWidth: 1, borderColor: '#DDD' 
+  },
+  ipLabel: { fontSize: 12, color: '#666', marginBottom: 5 },
+  ipInput: { 
+    fontSize: 16, color: '#333', borderBottomWidth: 1, 
+    borderBottomColor: '#2196F3', paddingVertical: 5 
+  },
+
   imageContainer: { 
-    width: '100%', height: 300, backgroundColor: '#E0E0E0', 
+    width: '100%', height: 250, backgroundColor: '#E0E0E0', 
     justifyContent: 'center', alignItems: 'center', borderRadius: 10, marginBottom: 20, overflow: 'hidden'
   },
   previewImage: { width: '100%', height: '100%' },
   placeholder: { alignItems: 'center' },
   placeholderText: { color: '#888' },
+  
   buttonRow: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 15 },
   btnSecondary: { 
     flex: 1, backgroundColor: '#FFF', padding: 15, borderRadius: 8, 
@@ -203,17 +234,16 @@ const styles = StyleSheet.create({
   },
   btnPrimary: { 
     width: '100%', backgroundColor: '#2196F3', padding: 15, 
-    borderRadius: 8, alignItems: 'center', marginBottom: 20 
+    borderRadius: 8, alignItems: 'center', marginBottom: 30 
   },
   btnDisabled: { backgroundColor: '#B0BEC5' },
   btnText: { color: '#333', fontWeight: '600' },
   btnTextPrimary: { color: '#FFF', fontWeight: 'bold', fontSize: 16 },
   
-  // Sonuç Kartı Stilleri
   resultCard: { 
     width: '100%', backgroundColor: '#FFF', padding: 20, borderRadius: 10,
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, marginBottom: 30
+    shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, marginBottom: 50
   },
   resultTitle: { fontSize: 22, fontWeight: 'bold', color: '#2196F3', textAlign: 'center', marginBottom: 15 },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
@@ -222,7 +252,6 @@ const styles = StyleSheet.create({
   label: { fontSize: 14, color: '#666' },
   value: { fontSize: 18, fontWeight: 'bold', color: '#333' },
   
-  // Uyarı ve Renkler
   warningBox: { backgroundColor: '#FFF3CD', padding: 10, borderRadius: 5, marginVertical: 10, borderWidth: 1, borderColor: '#FFEEBA' },
   warningText: { color: '#856404', fontSize: 14, textAlign: 'center' },
   textDanger: { color: '#D32F2F' },
