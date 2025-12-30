@@ -9,9 +9,9 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
-  Platform,
   TextInput,
-  PermissionsAndroid, // <--- YENİ: İzin Kütüphanesi Eklendi
+  Platform,
+  PermissionsAndroid,
 } from 'react-native';
 import { launchCamera, launchImageLibrary, Asset } from 'react-native-image-picker';
 
@@ -21,29 +21,26 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   
-  // Varsayılan IP
-  const [serverIp, setServerIp] = useState('192.168.1.25');
+  // Varsayılan IP (Değiştirebilirsin)
+  const [serverIp, setServerIp] = useState('192.168.1.25'); 
 
+  // URL Oluşturucu Helper
   const getServerUrl = () => {
     let ip = serverIp.trim();
-    if (!ip.startsWith('http')) {
-      ip = `http://${ip}`;
-    }
-    if (!ip.includes(':')) {
-      ip = `${ip}:5000`;
-    }
+    if (!ip.startsWith('http')) ip = `http://${ip}`;
+    if (!ip.includes(':')) ip = `${ip}:5000`;
     return ip;
   };
 
-  // --- YENİ: KAMERA İZNİ İSTEME FONKSİYONU ---
+  // Kamera İzni İsteme (Android İçin)
   const requestCameraPermission = async () => {
     if (Platform.OS === 'android') {
       try {
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.CAMERA,
           {
-            title: "Kamera İzni Lazım Usta",
-            message: "Test kasetini çekebilmemiz için kamerana erişmemiz gerekiyor.",
+            title: "Kamera İzni",
+            message: "Analiz yapabilmek için kameraya erişim gerekiyor.",
             buttonNeutral: "Sonra Sor",
             buttonNegative: "İptal",
             buttonPositive: "Tamam"
@@ -55,89 +52,88 @@ export default function App() {
         return false;
       }
     }
-    return true; // iOS için şimdilik true dönüyoruz
+    return true;
   };
 
-  // Fotoğraf Seçme
+  // Fotoğraf Seçme (Base64 Modu Açık)
   const handleSelectPhoto = async (type: 'camera' | 'library') => {
     const options = {
       mediaType: 'photo' as const,
-      quality: 1,
+      quality: 0.8, // Transfer hızı için kaliteyi biraz kıstık (Motor etkilenmez)
+      includeBase64: true, // <--- İŞTE SİHİRLİ ANAHTAR BU
       saveToPhotos: true,
     };
 
     const callback = (response: any) => {
       if (response.didCancel) return;
       if (response.errorCode) {
-        // İzin hatası burada yakalanırsa kullanıcıya bilgi ver
-        if (response.errorMessage.includes('permission')) {
-            Alert.alert('İzin Hatası', 'Kamera veya Galeri izni verilmedi.');
-        } else {
-            Alert.alert('Hata', response.errorMessage);
-        }
+        Alert.alert('Hata', response.errorMessage);
         return;
       }
       if (response.assets && response.assets.length > 0) {
         setPhoto(response.assets[0]);
-        setResult(null); 
+        setResult(null); // Yeni foto seçince eski sonucu temizle
       }
     };
 
     if (type === 'camera') {
-        // Önce izin var mı diye kontrol et / iste
         const hasPermission = await requestCameraPermission();
         if (!hasPermission) {
-            Alert.alert("İzin Reddedildi", "Kamerayı kullanmak için ayarlardan izin vermelisin usta.");
+            Alert.alert("İzin Yok", "Kamera izni verilmedi.");
             return;
         }
-        // İzin varsa kamerayı aç
         launchCamera(options as any, callback);
     } else {
         launchImageLibrary(options as any, callback);
     }
   };
 
-  // Analiz Etme
+  // Analiz Etme (JSON Yöntemiyle)
   const handleAnalyze = async () => {
-    if (!photo) {
-      Alert.alert('Uyarı', 'Lütfen önce bir fotoğraf seçin.');
+    if (!photo || !photo.base64) {
+      Alert.alert('Uyarı', 'Fotoğraf verisi (Base64) alınamadı. Tekrar çekin.');
       return;
     }
 
     setLoading(true);
-    const formData = new FormData();
-    formData.append('file', {
-      uri: Platform.OS === 'ios' ? photo.uri?.replace('file://', '') : photo.uri,
-      type: photo.type,
-      name: photo.fileName || 'test_image.jpg',
-    });
 
-    const targetUrl = `${getServerUrl()}/analyze`;
+    // Endpoint artık /analyze_base64
+    const targetUrl = `${getServerUrl()}/analyze_base64`;
     console.log("İstek Gönderiliyor:", targetUrl);
 
     try {
       const response = await fetch(targetUrl, {
         method: 'POST',
-        body: formData,
         headers: {
-          'Content-Type': 'multipart/form-data',
+          'Content-Type': 'application/json', // Dosya değil, JSON gönderiyoruz
         },
+        // Resmi 'image' anahtarıyla paketliyoruz
+        body: JSON.stringify({
+          image: photo.base64, 
+          study: "MobilTest",
+          hid: "MobilUser"
+        }),
       });
 
       const data = await response.json();
-      console.log("Cevap Geldi:", data);
+      console.log("Sunucu Cevabı:", data);
 
       if (data.success) {
+        // --- BAŞARILI ---
         setResult(data);
+        
+        // Eğer motor "Bulanık" dediyse uyarıyı göster
         if (data.warning) {
           Alert.alert("Dikkat", data.warning);
         }
       } else {
+        // --- MOTOR HATASI ---
         setResult(null);
         Alert.alert("Analiz Hatası", data.error || "Bilinmeyen hata.");
       }
 
     } catch (error) {
+      // --- AĞ HATASI ---
       Alert.alert("Bağlantı Hatası", `Sunucuya ulaşılamadı.\nAdres: ${targetUrl}\nIP adresini kontrol et.`);
       console.error(error);
     } finally {
@@ -149,9 +145,9 @@ export default function App() {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         
-        <Text style={styles.header}>LFA Analiz V17.5</Text>
+        <Text style={styles.header}>LFA Analiz V17.6 (Base64)</Text>
 
-        {/* IP AYARI */}
+        {/* IP GİRİŞ ALANI */}
         <View style={styles.ipContainer}>
           <Text style={styles.ipLabel}>Sunucu IP Adresi:</Text>
           <TextInput
@@ -192,11 +188,12 @@ export default function App() {
           {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnTextPrimary}>ANALİZ BAŞLAT</Text>}
         </TouchableOpacity>
 
-        {/* SONUÇ KARTI */}
+        {/* --- SONUÇ KARTI --- */}
         {result && (
           <View style={styles.resultCard}>
             <Text style={styles.resultTitle}>Sonuç: {parseFloat(result.ratio).toFixed(4)}</Text>
             
+            {/* Netlik Skoru Göstergesi */}
             <View style={styles.infoRow}>
               <Text style={styles.label}>Netlik Skoru:</Text>
               <Text style={[styles.value, (result.blur_score || 0) < 15 ? styles.textDanger : styles.textSuccess]}>
@@ -204,12 +201,14 @@ export default function App() {
               </Text>
             </View>
 
+            {/* Uyarı Kutusu (Bulanık Uyarısı Burada Çıkar) */}
             {result.warning ? (
               <View style={styles.warningBox}>
                 <Text style={styles.warningText}>⚠️ {result.warning}</Text>
               </View>
             ) : null}
 
+            {/* C ve T Değerleri */}
             <View style={styles.grid}>
               <View style={styles.gridItem}>
                 <Text style={styles.label}>Control (C)</Text>
@@ -221,6 +220,7 @@ export default function App() {
               </View>
             </View>
 
+            {/* Grafik Resmi */}
             {result.graph_url && (
                <Image 
                  source={{ uri: `${getServerUrl()}/${result.graph_url}?t=${new Date().getTime()}` }} 
@@ -272,6 +272,7 @@ const styles = StyleSheet.create({
   btnText: { color: '#333', fontWeight: '600' },
   btnTextPrimary: { color: '#FFF', fontWeight: 'bold', fontSize: 16 },
   
+  // Sonuç Kartı Stilleri
   resultCard: { 
     width: '100%', backgroundColor: '#FFF', padding: 20, borderRadius: 10,
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 },
@@ -284,10 +285,13 @@ const styles = StyleSheet.create({
   label: { fontSize: 14, color: '#666' },
   value: { fontSize: 18, fontWeight: 'bold', color: '#333' },
   
+  // Uyarı Kutusu
   warningBox: { backgroundColor: '#FFF3CD', padding: 10, borderRadius: 5, marginVertical: 10, borderWidth: 1, borderColor: '#FFEEBA' },
   warningText: { color: '#856404', fontSize: 14, textAlign: 'center' },
-  textDanger: { color: '#D32F2F' },
-  textSuccess: { color: '#388E3C' },
+  
+  // Netlik Skoru Renkleri
+  textDanger: { color: '#D32F2F', fontWeight: 'bold' },
+  textSuccess: { color: '#388E3C', fontWeight: 'bold' },
   
   graphImage: { width: '100%', height: 200, marginTop: 15, backgroundColor: '#FAFAFA' }
 });
