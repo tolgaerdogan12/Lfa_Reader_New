@@ -4,6 +4,10 @@ on:
   push:
     branches: [ main ]
 
+# --- 1. SİSTEME NDK 26'YI ZORLA TANIYORUZ ---
+env:
+  ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
@@ -29,16 +33,16 @@ jobs:
       - name: Gradle İzinlerini Ver
         run: chmod +x android/gradlew
 
-      # --- EKLENEN KISIM BURASI (AŞÇIYA AYAR VERİYORUZ) ---
-      - name: NDK 27'yi Sil (Zorla NDK 26)
+      # NDK 27'yi yine de silelim, ayağımıza dolanmasın
+      - name: NDK 27 Temizliği
         run: |
-          echo "NDK 27 klasörü siliniyor..."
+          echo "NDK 27 varsa siliniyor..."
           sudo rm -rf /usr/local/lib/android/sdk/ndk/27.0.12077973
-      # ----------------------------------------------------
 
+      # --- 2. KOMUT SATIRINDAN DA ZORLUYORUZ ---
       - name: APK Oluştur (Release)
         working-directory: android
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleRelease -Pandroid.ndkVersion=26.1.10909125 --no-daemon
 
       - name: APK'yı Yükle (Artifacts)
         uses: actions/upload-artifact@v4
