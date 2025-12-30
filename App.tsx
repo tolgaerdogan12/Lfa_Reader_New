@@ -10,7 +10,8 @@ import {
   ActivityIndicator,
   ScrollView,
   Platform,
-  TextInput, // Yeni: IP girmek için eklendi
+  TextInput,
+  PermissionsAndroid, // <--- YENİ: İzin Kütüphanesi Eklendi
 } from 'react-native';
 import { launchCamera, launchImageLibrary, Asset } from 'react-native-image-picker';
 
@@ -20,26 +21,45 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   
-  // YENİ: IP Adresi artık bir değişken (State)
-  // Varsayılan olarak senin son IP'ni koydum, ama değiştirebilirsin.
+  // Varsayılan IP
   const [serverIp, setServerIp] = useState('192.168.1.25');
 
-  // Helper: Tam URL oluşturucu (http://IP:5000)
   const getServerUrl = () => {
-    // Kullanıcı http yazdı mı kontrol et, yazmadıysa ekle
     let ip = serverIp.trim();
     if (!ip.startsWith('http')) {
       ip = `http://${ip}`;
     }
-    // Port numarası (5000) yoksa ekle (Basit kontrol)
     if (!ip.includes(':')) {
       ip = `${ip}:5000`;
     }
     return ip;
   };
 
+  // --- YENİ: KAMERA İZNİ İSTEME FONKSİYONU ---
+  const requestCameraPermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          {
+            title: "Kamera İzni Lazım Usta",
+            message: "Test kasetini çekebilmemiz için kamerana erişmemiz gerekiyor.",
+            buttonNeutral: "Sonra Sor",
+            buttonNegative: "İptal",
+            buttonPositive: "Tamam"
+          }
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } catch (err) {
+        console.warn(err);
+        return false;
+      }
+    }
+    return true; // iOS için şimdilik true dönüyoruz
+  };
+
   // Fotoğraf Seçme
-  const handleSelectPhoto = (type: 'camera' | 'library') => {
+  const handleSelectPhoto = async (type: 'camera' | 'library') => {
     const options = {
       mediaType: 'photo' as const,
       quality: 1,
@@ -49,7 +69,12 @@ export default function App() {
     const callback = (response: any) => {
       if (response.didCancel) return;
       if (response.errorCode) {
-        Alert.alert('Hata', response.errorMessage);
+        // İzin hatası burada yakalanırsa kullanıcıya bilgi ver
+        if (response.errorMessage.includes('permission')) {
+            Alert.alert('İzin Hatası', 'Kamera veya Galeri izni verilmedi.');
+        } else {
+            Alert.alert('Hata', response.errorMessage);
+        }
         return;
       }
       if (response.assets && response.assets.length > 0) {
@@ -58,8 +83,18 @@ export default function App() {
       }
     };
 
-    if (type === 'camera') launchCamera(options as any, callback);
-    else launchImageLibrary(options as any, callback);
+    if (type === 'camera') {
+        // Önce izin var mı diye kontrol et / iste
+        const hasPermission = await requestCameraPermission();
+        if (!hasPermission) {
+            Alert.alert("İzin Reddedildi", "Kamerayı kullanmak için ayarlardan izin vermelisin usta.");
+            return;
+        }
+        // İzin varsa kamerayı aç
+        launchCamera(options as any, callback);
+    } else {
+        launchImageLibrary(options as any, callback);
+    }
   };
 
   // Analiz Etme
@@ -77,7 +112,6 @@ export default function App() {
       name: photo.fileName || 'test_image.jpg',
     });
 
-    // Dinamik URL kullanıyoruz
     const targetUrl = `${getServerUrl()}/analyze`;
     console.log("İstek Gönderiliyor:", targetUrl);
 
@@ -117,7 +151,7 @@ export default function App() {
         
         <Text style={styles.header}>LFA Analiz V17.5</Text>
 
-        {/* --- YENİ: IP ADRESİ AYARI --- */}
+        {/* IP AYARI */}
         <View style={styles.ipContainer}>
           <Text style={styles.ipLabel}>Sunucu IP Adresi:</Text>
           <TextInput
@@ -125,7 +159,7 @@ export default function App() {
             value={serverIp}
             onChangeText={setServerIp}
             placeholder="Örn: 192.168.1.25"
-            keyboardType="numeric" // Telefondan kolay giriş için
+            keyboardType="numeric" 
           />
         </View>
 
@@ -158,7 +192,7 @@ export default function App() {
           {loading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.btnTextPrimary}>ANALİZ BAŞLAT</Text>}
         </TouchableOpacity>
 
-        {/* --- SONUÇ KARTI --- */}
+        {/* SONUÇ KARTI */}
         {result && (
           <View style={styles.resultCard}>
             <Text style={styles.resultTitle}>Sonuç: {parseFloat(result.ratio).toFixed(4)}</Text>
@@ -187,7 +221,6 @@ export default function App() {
               </View>
             </View>
 
-            {/* Grafik Resmi: Dinamik IP kullanarak */}
             {result.graph_url && (
                <Image 
                  source={{ uri: `${getServerUrl()}/${result.graph_url}?t=${new Date().getTime()}` }} 
@@ -208,7 +241,6 @@ const styles = StyleSheet.create({
   scrollContainer: { padding: 20, alignItems: 'center' },
   header: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 15 },
   
-  // IP Ayar Stilleri
   ipContainer: { 
     width: '100%', marginBottom: 15, padding: 10, 
     backgroundColor: '#FFF', borderRadius: 8, borderWidth: 1, borderColor: '#DDD' 
